@@ -1,0 +1,6 @@
+sigpy
+scipy==1.13.1
+cupy
+mpi4py
+matplotlib
+gt-twixtools

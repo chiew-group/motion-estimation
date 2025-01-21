@@ -1,0 +1,86 @@
+import sigpy as sp
+import numpy as np
+
+def generate_motion_parameters(num_states, low_freq_var=0.1, high_freq_var=5.0, spike_prob=0.02):
+    """
+    Generate rigid body head motion parameters with low-frequency noise and high-frequency spikes.
+    Rotations are constrained to radian units within ±20 degrees.
+
+    Parameters:
+    - num_states (int): Number of motion states (time points).
+    - low_freq_var (float): Variance of the low-frequency noise.
+    - high_freq_var (float): Variance of the high-frequency spikes.
+    - spike_prob (float): Probability of a spike occurring at each time point.
+
+    Returns:
+    - np.ndarray: An array of shape (num_states, 6) representing the motion parameters
+                  (3 translations and 3 rotations in radians).
+    """
+    # Generate low-frequency noise using a cumulative sum of Gaussian noise
+    low_freq_noise = np.cumsum(np.random.normal(0, np.sqrt(low_freq_var), size=(num_states, 6)), axis=0)
+    
+    # Generate sparse high-frequency spikes
+    spikes = np.random.choice([0, 1], size=(num_states, 6), p=[1 - spike_prob, spike_prob]) \
+             * np.random.normal(0, np.sqrt(high_freq_var), size=(num_states, 6))
+    
+    # Combine low-frequency noise and spikes
+    motion_parameters = low_freq_noise + spikes
+
+    # Constrain rotation parameters to radians within ±20 degrees (±0.35 radians)
+    #motion_parameters[:, 3:] = np.clip(motion_parameters[:, 3:], -np.deg2rad(20), np.deg2rad(20))
+    
+    return motion_parameters
+
+def compute_spatial_coord(resolution, subsample_resolution=None, device=sp.cpu_device):
+    xp = device.xp
+    if subsample_resolution is None:
+        subsample_resolution = resolution
+    r1 = xp.linspace(-resolution[0]//2,  resolution[0]//2, subsample_resolution[0], endpoint=False).reshape((-1,1,1))
+    r2 = xp.linspace(-resolution[1]//2,  resolution[1]//2, subsample_resolution[1], endpoint=False).reshape((1,-1,1))
+    r3 = xp.linspace(-resolution[2]//2,  resolution[2]//2, subsample_resolution[2], endpoint=False).reshape((1,1,-1))
+    return r1, r2, r3
+
+def compute_spectral_coord(resolution, device=sp.cpu_device):
+    xp = device.xp
+    k1 = xp.linspace(-xp.pi,  xp.pi, resolution[0], endpoint=False).reshape((-1,1,1)) #* (1/subsample_resolution[0])
+    k2 = xp.linspace(-xp.pi,  xp.pi, resolution[1], endpoint=False).reshape((1,-1,1)) #* (1/subsample_resolution[1])
+    k3 = xp.linspace(-xp.pi,  xp.pi, resolution[2], endpoint=False).reshape((1,1,-1)) #* (1/subsample_resolution[2])
+    return k1, k2, k3
+
+def compute_transform_grids(resolution, subsample_resolution=None, device=sp.cpu_device):
+    if subsample_resolution is None:
+        subsample_resolution = resolution
+    r1, r2, r3 = compute_spatial_coord(resolution, subsample_resolution, device=device)
+    k1, k2, k3 = compute_spectral_coord(subsample_resolution, device=device)
+    rkgrid = [[k2 * r3, k3 * r1, k1 * r2], [k3 * r2, k1 * r3, k2 * r1]]
+    return [k1, k2, k3], rkgrid
+
+def generate_shot_mask(bins, img_shape, img_axis=1):
+    num_shots = img_shape[img_axis] // bins
+    sampling_mask = np.zeros((num_shots, *img_shape), dtype=bool)
+    
+    for shot in range(num_shots):
+        idx = [shot] + [slice(None)] * len(img_shape)
+        idx[1+img_axis] = slice(shot * bins, (shot+1) * bins)
+        sampling_mask[tuple(idx)] = 1
+    return sampling_mask
+
+def generate_motion_corruption(img, mps, bins, bin_axis=1, transforms=None, device=sp.cpu_device):
+    from transform import RigidTransform
+    bin_size = img.shape[bin_axis] // bins
+    shot_mask = generate_shot_mask(bin_size, img.shape, img_axis=bin_axis)
+    kgrid, rkgrid = compute_transform_grids(img.shape, device=device)
+    
+    if transforms is None:
+        transforms = generate_motion_parameters(len(shot_mask))
+    else:
+        transforms = sp.to_device(transforms, device)
+    
+    S = sp.linop.Multiply(img.shape, mps)
+    F = sp.linop.FFT(S.oshape, axes=[-3,-2,-1])
+    ksp = 0
+    for shot_idx in range(len(transforms)):
+        A = sp.linop.Multiply(F.oshape, shot_mask[shot_idx])
+        T = RigidTransform(img.shape, img.shape, transforms[shot_idx], kgrid, rkgrid)
+        ksp += (A * F * S * T * img)
+    return ksp, transforms, shot_mask
