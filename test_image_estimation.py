@@ -22,16 +22,19 @@ class TestImageEstimation(unittest.TestCase):
         img = gaussian_filter(img, 1)
         mps = sim.birdcage_maps(mps_shape)
 
-        num_shots = 2
-        bin_size = 16
-        num_bins = 64 // bin_size
+        num_shots = 8
+        bin_size = 32 // num_shots
+        #num_bins = 64 // bin_size
         #shot_mask = generate_shot_mask(num_bins, img_shape)
         shot_mask = np.zeros((num_shots, *img_shape), dtype=bool)
         for s in range(num_shots):
             shot_mask[s, s*bin_size:(s+1)*bin_size] = True
         #transforms = generate_motion_parameters(num_shots)
-        transforms = np.array([[-1, -2, -1, (-5*np.pi/180), (-4*np.pi/180), (-2*np.pi/180)], [1, 2, 1, (5*np.pi/180), (4*np.pi/180), (2*np.pi/180)]])
+        #transforms = np.array([[-1, -2, -1, (-5*np.pi/180), (-4*np.pi/180), (-2*np.pi/180)], [1, 2, 1, (5*np.pi/180), (4*np.pi/180), (2*np.pi/180)]])
         #transforms[:, 3:] *= np.pi/180
+        transforms = np.zeros((num_shots, 6), dtype=float)
+        transforms[:, 3:] = np.pi * 5 * (np.random.rand(num_shots, 3)-0.5) / 180
+        
         kgrid, rkgrid = compute_transform_grids(img_shape)
 
         ksp = 0
@@ -48,22 +51,22 @@ class TestImageEstimation(unittest.TestCase):
         ksp, mps, shot_mask, transforms, img = self.shepp_logan_setup()
         M = (sp.rss(img) > 1e-3)
         P = sp.linop.Multiply(ksp.shape[1:], 1 / (np.sum(np.abs(mps) ** 2, axis=0) + 1e-3))
-        ksp = sp.to_device(ksp, sp.Device(0))
-        mps = sp.to_device(mps, sp.Device(0))
-        shot_mask = sp.to_device(shot_mask, sp.Device(0))
-        transforms = sp.to_device(transforms, sp.Device(0))
-        img = sp.to_device(img, sp.Device(0))
-        M = sp.to_device(M, sp.Device(0))
+        #ksp = sp.to_device(ksp, sp.Device(0))
+        #mps = sp.to_device(mps, sp.Device(0))
+        #shot_mask = sp.to_device(shot_mask, sp.Device(0))
+        #transforms = sp.to_device(transforms, sp.Device(0))
+        #img = sp.to_device(img, sp.Device(0))
+        #M = sp.to_device(M, sp.Device(0))
                         
         gpu_device = sp.Device(0)
         xp = gpu_device.xp
         kgrid, rkgrid = compute_transform_grids(img.shape, device=gpu_device)
 
     
-        recon = ImageEstimation(ksp, mps, shot_mask, transforms, kgrid, rkgrid, P=P, constraint=M, max_iter=1000, tol=1e-12, device=gpu_device).run()
+        recon = ImageEstimation(ksp, mps, shot_mask, transforms, kgrid, rkgrid, x=None, P=P, constraint=M, max_iter=1000, tol=1e-12, device=gpu_device).run()
         import sigpy.plot as pl
         pl.ImagePlot(recon)
-        npt.assert_allclose(img.get(), recon.get(), atol=1e-3, rtol=1e-3)
+        npt.assert_allclose(img, recon.get(), atol=1e-3, rtol=1e-3)
     
     def test_image_estimation_fidelity(self):
         ksp, mps, shot_mask, transforms, img = self.shepp_logan_setup()
