@@ -35,9 +35,9 @@ def compute_spatial_coord(resolution, subsample_resolution=None, device=sp.cpu_d
     xp = device.xp
     if subsample_resolution is None:
         subsample_resolution = resolution
-    r1 = xp.linspace(-resolution[0]//2,  resolution[0]//2, subsample_resolution[0], endpoint=False).reshape((-1,1,1))
-    r2 = xp.linspace(-resolution[1]//2,  resolution[1]//2, subsample_resolution[1], endpoint=False).reshape((1,-1,1))
-    r3 = xp.linspace(-resolution[2]//2,  resolution[2]//2, subsample_resolution[2], endpoint=False).reshape((1,1,-1))
+    r1 = xp.linspace(-(resolution[0]//2),  resolution[0]//2, subsample_resolution[0], endpoint=False).reshape((-1,1,1))
+    r2 = xp.linspace(-(resolution[1]//2),  resolution[1]//2, subsample_resolution[1], endpoint=False).reshape((1,-1,1))
+    r3 = xp.linspace(-(resolution[2]//2),  resolution[2]//2, subsample_resolution[2], endpoint=False).reshape((1,1,-1))
     return r1, r2, r3
 
 def compute_spectral_coord(resolution, device=sp.cpu_device):

@@ -104,7 +104,7 @@ class JointEstimation(sp.app.App):
             )
 
     def _output(self):
-        return self.img, self.transforms#, np.array(self.objective_values), np.stack(self.t_iterations, axis=-1)
+        return self.img * self.ksp_norm, self.transforms#, np.array(self.objective_values), np.stack(self.t_iterations, axis=-1)
     
     def _post_update(self):        
         if self.verbose:
@@ -176,8 +176,8 @@ class JointEstimation(sp.app.App):
         img_adj = sp.ifft(self.ksp, axes=list(range(-self.img_dim, 0)))
         img_adj *= self.mps.conj()
         img_adj = np.sum(img_adj, axis=0)
-        norm = np.linalg.norm(img_adj).item()
-        self.ksp /= norm
+        self.ksp_norm = np.linalg.norm(img_adj).item()
+        self.ksp /= self.ksp_norm
 
 def get_preconditions(mps):
     xp = sp.get_array_module(mps)
