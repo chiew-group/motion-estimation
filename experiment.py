@@ -99,7 +99,10 @@ if __name__ == '__main__':
     recon = recon.get()
     estimates = estimates.get()
     experiment_name = f"{num_recon_shots}_shot_recon_for_{num_shots}_shot_corruption"
+    np.save(f"{args.output_dir}/recon_{experiment_name}", recon)
+    np.save(f"{args.output_dir}/sense_recon_{num_shots}_shot_corruption", sense_recon)
 
+    """
     fig, axes = plt.subplots(3, 4, figsize=(12,9), gridspec_kw={'wspace': -0.05, 'hspace': -0.05})
     fig.suptitle(experiment_name)
     brain_label = ["Ground", "Corrupted", "Naive", "Joint"]
@@ -130,7 +133,7 @@ if __name__ == '__main__':
 
     plt.subplots_adjust(wspace=0, hspace=0)
     plt.savefig(f"{args.output_dir}/{experiment_name}", dpi=300)
-    
+    """
 
     nrmse_sense_recon = compute_nrmse(ground_truth, sense_recon)
     nrmse_joint_recon = compute_nrmse(ground_truth, recon)
