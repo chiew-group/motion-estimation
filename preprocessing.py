@@ -85,6 +85,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
+    base_name = os.path.basename(args.dat_file).replace('.dat', '')
 
     ksp, ref_ksp = get_kspaces(args.dat_file)
 
@@ -118,9 +119,9 @@ if __name__ == '__main__':
     mps = sp.to_device(mps)
     recon = sp.to_device(recon)
 
-    np.save(os.path.join(args.out_dir, "ksp"), ksp)
+    np.save(os.path.join(args.out_dir, f"{base_name}_ksp"), ksp)
     print(f"Kspace saved in directory {args.out_dir}!")
-    np.save(os.path.join(args.out_dir, "mps"), mps)
+    np.save(os.path.join(args.out_dir, f"{base_name}_mps"), mps)
     print(f"Maps saved in directory {args.out_dir}!")
-    np.save(os.path.join(args.out_dir, "sense_recon"), recon)
-    print(f"Naive Sense recon saved in directory {args.out_dir}!")
+    np.save(os.path.join(args.out_dir, f"{base_name}_sense"), recon)
+    print(f"Naive Sense recon saved in directory {args.out_dir}!")  
