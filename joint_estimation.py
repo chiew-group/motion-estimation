@@ -88,8 +88,10 @@ class JointEstimation(sp.app.App):
                 show_pbar = show_pbar and comm.rank == 0
         self._normalize()
         self.ksp = sp.to_device(self.ksp, device=device)
-        
+        #self.img *= self.ksp_norm
         self.objective_values = [self.objective()]
+        #self.history = [self.img.copy()]
+        #self.transform_history = [self.transforms.copy()]
         alg = sp.alg.AltMin(self._minX, self._minT, self.max_joint_iter)
         super().__init__(alg, show_pbar=show_pbar)
     
@@ -120,7 +122,13 @@ class JointEstimation(sp.app.App):
         
         #self.objective_values.append(objective(self.img, self.transforms, self.mps, self.shot_mask,
         #                                       self.ksp, self.kgrid, self.rkgrid))
+        #self.history.append(self.img.copy())
+        #self.transform_history.append(self.transforms.copy())
 
+        #if len(self.transform_history) >= 2:
+        #    delta = np.linalg.norm(self.transform_history[-1] - self.transform_history[-2])
+        #    print(f"Δ Transform (step {self.alg.iter}): {delta:.4e}")
+            
         if self.convergence_flags.all():
             self.alg.done = lambda: True
         

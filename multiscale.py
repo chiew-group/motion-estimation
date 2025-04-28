@@ -10,7 +10,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Joint estimation for motion corruption')
     parser.add_argument('ksp_file', type=str, help='K-space file.')
     parser.add_argument('mps_file', type=str, help='Coil maps file.')
-    parser.add_argument('output_dir', type=str)
+    parser.add_argument('output_file', type=str)
     parser.add_argument('motion_states', type=int, help='Number of line scanes to group for motion estiamte.')
     parser.add_argument('motion_axis', type=int, default=1, help='0: Par, 1: Lin, 2: Col, used for sampling of states along an axis.')
 
@@ -71,7 +71,7 @@ if __name__ == '__main__':
 
     recon, estimates = JointEstimation(coarse_ksp, coarse_mps, shot_mask, kgrid, rkgrid, 
                                     device=gpu, P=P, constraint=M, img=low_res_sense_recon,
-                                    max_joint_iter=1, tol=1e-12).run()
+                                    max_joint_iter=10000, tol=1e-12).run()
 
     low_res_recon = sp.to_device(recon)
     low_res_estimates = sp.to_device(estimates)
@@ -118,7 +118,7 @@ if __name__ == '__main__':
     recon, estimates = JointEstimation(coarse_ksp, coarse_mps, shot_mask, kgrid, rkgrid, 
                                     device=gpu, P=P, constraint=M, 
                                     img=low_res_recon, transforms=low_res_estimates,
-                                    max_joint_iter=1, tol=1e-12).run()
+                                    max_joint_iter=500, tol=1e-12).run()
 
     med_res_recon = sp.to_device(recon)
     med_res_estimates = sp.to_device(estimates)
@@ -131,39 +131,8 @@ if __name__ == '__main__':
     kgrid, rkgrid = compute_transform_grids(full_res_img_shape, device=sp.cpu_device)
     joint_recon = ImageEstimation(ksp, mps, full_sampling_mask, med_res_estimates, kgrid, rkgrid,
                             x=med_res_recon, P=P, constraint=M, 
-                            device=sp.cpu_device, max_iter=1, tol=1e-12).run()
+                            device=sp.cpu_device, max_iter=5, tol=1e-12).run()
 
     joint_recon = sp.to_device(joint_recon)
 
-    ##########################################
-    #Plots and saving to log files
-    corrupted_image = sp.mri.linop.Sense(mps).H * ksp
-    experiment_name = f"{num_shots}_shot_reconstruction"
-    fig, axes = plt.subplots(3, 3, figsize=(12,9), gridspec_kw={'wspace': -0.05, 'hspace': -0.05})
-    fig.suptitle(experiment_name)
-    brain_label = ["Corrupted", "Naive", "Joint"]
-    for col, mri_image in enumerate([corrupted_image, sense_recon, joint_recon]):
-        # Get middle slices
-        slice_x = mri_image.shape[0] // 2  # Sagittal
-        slice_y = mri_image.shape[1] // 2  # Coronal
-        slice_z = mri_image.shape[2] // 2  # Axial
-
-        # Extract slices
-        sagittal_slice = mri_image[slice_x, :, :]
-        coronal_slice = mri_image[:, slice_y, :]
-        axial_slice = mri_image[:, :, slice_z]
-
-        # Plot slices in respective rows
-        axes[0, col].imshow(np.abs(sagittal_slice), cmap="gray", origin="lower")
-        axes[1, col].imshow(np.abs(coronal_slice), cmap="gray", origin="lower")
-        axes[2, col].imshow(np.abs(axial_slice), cmap="gray", origin="lower")
-
-        # Set column title for each MRI scan
-        axes[0, col].set_title(f"{brain_label[col]}")
-
-    # Remove axes for better visualization
-    for ax in axes.flatten():
-        ax.axis("off")
-
-    plt.subplots_adjust(wspace=0, hspace=0)
-    plt.savefig(f"{args.output_dir}/{experiment_name}", dpi=300)
+    np.save(args.output_file, joint_recon)

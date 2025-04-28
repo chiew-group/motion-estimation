@@ -207,7 +207,7 @@ class RigidTransformDerivative(sp.linop.Linop):
         if self.p_idx < 3:                
             input = _rotation(input, theta3, self.rkgrid[0][2], self.rkgrid[1][2], 0, 1)
             input = _rotation(input, theta2, self.rkgrid[0][1], self.rkgrid[1][1], 2, 0)
-            input = _rotation(input, theta1, self.rkgrid[0][0], self.rkgrid[1][1], 1, 2)
+            input = _rotation(input, theta1, self.rkgrid[0][0], self.rkgrid[1][0], 1, 2)
             input = _translation_derivative(input, self.p_idx, self.kgrid, q1, q2, q3)
             return input
 
@@ -221,7 +221,7 @@ class RigidTransformDerivative(sp.linop.Linop):
         elif self.p_idx == 4:
             input = _rotation(input, theta3, self.rkgrid[0][2], self.rkgrid[1][2], 0, 1)
             input = _rotation_derivative(input, self.p_idx, theta2, self.rkgrid[0][1], self.rkgrid[1][1], 2, 0)
-            input = _rotation(input, theta1, self.rkgrid[0][1], self.rkgrid[1][1], 1, 2)
+            input = _rotation(input, theta1, self.rkgrid[0][1], self.rkgrid[1][0], 1, 2)
             input = _translation(input, self.kgrid, q1, q2, q3)
             return input
 
