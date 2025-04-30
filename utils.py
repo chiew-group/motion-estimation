@@ -1,7 +1,7 @@
 import sigpy as sp
 import numpy as np
 
-def generate_motion_parameters(num_states, low_freq_var=0.1, high_freq_var=5.0, spike_prob=0.02):
+def generate_motion_parameters(num_states, low_freq_var=0.1, high_freq_var=5.0, spike_prob=0.02, seed=123456789):
     """
     Generate rigid body head motion parameters with low-frequency noise and high-frequency spikes.
     Rotations are constrained to radian units within ±20 degrees.
@@ -16,19 +16,22 @@ def generate_motion_parameters(num_states, low_freq_var=0.1, high_freq_var=5.0, 
     - np.ndarray: An array of shape (num_states, 6) representing the motion parameters
                   (3 translations and 3 rotations in radians).
     """
+    rng = np.random.default_rng(seed)
+
     # Generate low-frequency noise using a cumulative sum of Gaussian noise
-    low_freq_noise = np.cumsum(np.random.normal(0, np.sqrt(low_freq_var), size=(num_states, 6)), axis=0)
+    low_freq_noise = np.cumsum(rng.normal(0, np.sqrt(low_freq_var), size=(num_states, 6)), axis=0)
     
     # Generate sparse high-frequency spikes
-    spikes = np.random.choice([0, 1], size=(num_states, 6), p=[1 - spike_prob, spike_prob]) \
-             * np.random.normal(0, np.sqrt(high_freq_var), size=(num_states, 6))
+    spikes = rng.choice([0, 1], size=(num_states, 6), p=[1 - spike_prob, spike_prob]) \
+             * rng.normal(0, np.sqrt(high_freq_var), size=(num_states, 6))
     
     # Combine low-frequency noise and spikes
     motion_parameters = low_freq_noise + spikes
 
     # Constrain rotation parameters to radians within ±20 degrees (±0.35 radians)
     #motion_parameters[:, 3:] = np.clip(motion_parameters[:, 3:], -np.deg2rad(20), np.deg2rad(20))
-    
+    motion_parameters[:, 3:] *= np.pi  / 180 # Convert degrees to radians
+
     return motion_parameters
 
 def compute_spatial_coord(resolution, subsample_resolution=None, device=sp.cpu_device):

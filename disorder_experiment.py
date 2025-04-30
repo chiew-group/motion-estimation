@@ -4,9 +4,73 @@ import sigpy as sp
 from joint_estimation import JointEstimation
 from transform import RigidTransform
 from utils import compute_transform_grids, generate_motion_parameters
+import sigpy.plot as pl
 import matplotlib.pyplot as plt
 from skimage.metrics import structural_similarity as ssim
 
+def generate_disorder_mask(kspace_shape, num_shots, partition_size, partition_axis=1):
+    """
+    Generate a DISORDER sampling mask for k-space data with uniform coverage.
+
+    Each shot randomly selects one k-space point per partition, without resampling across shots.
+
+    Parameters:
+    - kspace_shape: tuple (num_coils, kx, ky, kz)
+    - num_shots: int
+    - partition_size: tuple (p1, p2), block size along two selected axes
+    - partition_axis: int, 1→(ky,kz), 2→(kx,kz), 3→(kx,ky)
+
+    Returns:
+    - mask: bool array (num_shots, kx, ky, kz)
+    """
+    num_coils, kx, ky, kz = kspace_shape
+    mask = np.zeros((num_shots, kx, ky, kz), dtype=bool)
+
+    # Maps for axes and their dimensions
+    axes_map = {1: (1, 2),  # ky, kz
+                2: (0, 2),  # kx, kz
+                3: (0, 1)}  # kx, ky
+    dims_map = {1: (ky, kz),
+                2: (kx, kz),
+                3: (kx, ky)}
+
+    if partition_axis not in axes_map:
+        raise ValueError("partition_axis must be 1, 2, or 3.")
+    axis1, axis2 = axes_map[partition_axis]
+    dim1, dim2 = dims_map[partition_axis]
+
+    p1, p2 = partition_size
+    grid1 = np.arange(0, dim1, p1)
+    grid2 = np.arange(0, dim2, p2)
+
+    sampled_points = set()
+    rng = np.random.default_rng(32)
+
+    for shot in range(num_shots):
+        shot_mask = np.zeros((kx, ky, kz), dtype=bool)
+        for g1 in grid1:
+            for g2 in grid2:
+                start1, end1 = g1, min(g1 + p1, dim1)
+                start2, end2 = g2, min(g2 + p2, dim2)
+                # Collect available points in this block
+                avail = []
+                for i in range(start1, end1):
+                    for j in range(start2, end2):
+                        if (i, j) not in sampled_points:
+                            avail.append((i, j))
+                if not avail:
+                    continue
+                sample1, sample2 = avail[rng.integers(len(avail))]
+                sampled_points.add((sample1, sample2))
+
+                # Build slicer for 3D mask (kx, ky, kz)
+                idx = [slice(None)] * 3
+                idx[axis1] = sample1
+                idx[axis2] = sample2
+                shot_mask[tuple(idx)] = True
+        mask[shot] = shot_mask
+
+    return mask
 
 def compute_nrmse(gt, recon):
     """Normalized RMSE between ground truth and reconstruction."""
@@ -48,21 +112,23 @@ if __name__ == '__main__':
 
     #Genearate random motion parameters to simulate continuous motion
     #So we transform essentially every lines scan in the kspace
-    transforms = generate_motion_parameters(num_shots, high_freq_var=2.0, seed=180)
+    transforms = generate_motion_parameters(16*8, high_freq_var=2.0, seed=180)
 
     #Create a shot mask that samples for each shot and simulates and accel factor for aliasing
-    shot_size = img_size // num_shots
-    shot_mask = np.zeros([num_shots, *ground_truth.shape], dtype=bool)
-    for s in range(num_shots):
-        shot_mask[s, s*shot_size:(s+1)*shot_size] = True
-    import sigpy.plot as pl
+    shot_mask = generate_disorder_mask(mps.shape, 8, (4, 4), partition_axis=1)
     #pl.ImagePlot(shot_mask)
+    corruption_mask = np.zeros((16*8,) + ground_truth.shape, dtype=bool)
+    corr_bin_size = img_size // 16
+    for s in range(8):
+        for i in range(16):
+            corruption_mask[s*16+i, :, i*corr_bin_size:(i+1)*corr_bin_size] = shot_mask[s, :, i*corr_bin_size:(i+1)*corr_bin_size]
+    #pl.ImagePlot(corruption_mask) 
     #Generate corrupted kspace and save corrupted image
     kgrid, rkgrid = compute_transform_grids(ground_truth.shape)
     S = sp.mri.linop.Sense(mps)
     ksp = 0
-    for s in range(num_shots):
-        A = sp.linop.Multiply(S.oshape, shot_mask[s])
+    for s in range(corruption_mask.shape[0]):
+        A = sp.linop.Multiply(S.oshape, corruption_mask[s])
         T = RigidTransform(ground_truth.shape, ground_truth.shape, transforms[s], kgrid, rkgrid)
         ksp += (A * S * T * ground_truth)
     
@@ -81,12 +147,6 @@ if __name__ == '__main__':
     #Need to copy the sense img if we use as start because algo will modify this ref 
     init_image_guess = sense_recon.copy() if args.sense else None
 
-    master_mask = (sp.rss(ksp, axes=(0,)) > 0).astype(bool)
-    shot_size = img_size // num_recon_shots
-    shot_mask = np.zeros((num_recon_shots, *ground_truth.shape), dtype=bool)
-    for s in range(num_recon_shots):
-        shot_mask[s, shot_size*s:(s+1)*shot_size] = master_mask[shot_size*s:(s+1)*shot_size]
-
 
     kgrid, rkgrid = compute_transform_grids(ground_truth.shape, device=exp_device)
     recon, estimates = JointEstimation(ksp, mps, shot_mask, kgrid, rkgrid, 
@@ -95,7 +155,8 @@ if __name__ == '__main__':
     
     recon = recon.get()
     estimates = estimates.get()
-    experiment_name = f"{num_recon_shots}shot_recon"
+    #pl.ImagePlot(recon)
+    experiment_name = f"disorder_recon"
     np.save(f"{args.output_dir}/{experiment_name}", recon)
     np.save(f"{args.output_dir}/sense_recon", sense_recon)
 
