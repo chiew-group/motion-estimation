@@ -5,6 +5,9 @@ import numpy as np
 import sigpy as sp
 from utils import compute_transform_grids
 import matplotlib.pyplot as plt
+import sigpy.plot as pl
+import cupy as cp
+cp.cuda.set_pinned_memory_allocator(None)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Joint estimation for motion corruption')
@@ -71,11 +74,10 @@ if __name__ == '__main__':
 
     recon, estimates = JointEstimation(coarse_ksp, coarse_mps, shot_mask, kgrid, rkgrid, 
                                     device=gpu, P=P, constraint=M, img=low_res_sense_recon,
-                                    max_joint_iter=10000, tol=1e-12).run()
-
+                                    max_joint_iter=5000, tol=1e-12).run()
     low_res_recon = sp.to_device(recon)
     low_res_estimates = sp.to_device(estimates)
-
+    #pl.ImagePlot(low_res_recon, title='Low Res Joint Recon')
     ########################################################
     #Downsample at medium resolution which is a factor of 2
     #Only at this resolution do we downsample the sense recon as it will be our initial guess
@@ -118,21 +120,29 @@ if __name__ == '__main__':
     recon, estimates = JointEstimation(coarse_ksp, coarse_mps, shot_mask, kgrid, rkgrid, 
                                     device=gpu, P=P, constraint=M, 
                                     img=low_res_recon, transforms=low_res_estimates,
-                                    max_joint_iter=500, tol=1e-12).run()
+                                    max_joint_iter=1000, tol=1e-12).run()
 
     med_res_recon = sp.to_device(recon)
     med_res_estimates = sp.to_device(estimates)
     med_res_recon = sp.ifft(sp.resize(sp.fft(med_res_recon), full_res_img_shape))
-
+    #pl.ImagePlot(med_res_recon, title='Med Res Joint Recon')
     rss = sp.rss(mps, axes=(0,))
     M = rss > np.max(rss) * 0.1
     P = sp.linop.Multiply(mps.shape[1:], 1 / (np.sum(np.abs(mps) ** 2, axis=0) + 1e-3))
 
-    kgrid, rkgrid = compute_transform_grids(full_res_img_shape, device=sp.cpu_device)
-    joint_recon = ImageEstimation(ksp, mps, full_sampling_mask, med_res_estimates, kgrid, rkgrid,
-                            x=med_res_recon, P=P, constraint=M, 
-                            device=sp.cpu_device, max_iter=5, tol=1e-12).run()
+    from utils import compute_transform_grids_voxel
+    from image_estimation import estimate_image_cg
 
-    joint_recon = sp.to_device(joint_recon)
 
-    np.save(args.output_file, joint_recon)
+    kgrid, rkgrid = compute_transform_grids_voxel(full_res_img_shape, [0.8,0.8,0.8], xp=cp)
+    ksp = cp.asarray(ksp)
+    ksp = cp.fft.fftshift(ksp)
+    mps = cp.asarray(mps)
+    mps = cp.fft.fftshift(mps)
+    shot_mask = cp.asarray(full_sampling_mask)
+    shot_mask = cp.fft.fftshift(shot_mask)
+    transforms = cp.asarray(med_res_estimates)
+    recon = estimate_image_cg(ksp, mps, shot_mask, transforms, kgrid, rkgrid, x0=None, max_iter=10, tol=1e-12)
+    recon = cp.asnumpy(cp.fft.fftshift(recon))
+
+    np.save(args.output_file, recon)

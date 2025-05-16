@@ -1,4 +1,6 @@
 import sigpy as sp
+from cupyx.scipy.fft import fftn as gpu_fftn, ifftn as gpu_ifftn, fft as gpu_fft, ifft as gpu_ifft
+import cupy as cp
 
 def _compute_shear_factor(rk, theta, mode, inverse=False):
     xp = sp.get_array_module(rk)
@@ -237,3 +239,139 @@ class RigidTransformDerivative(sp.linop.Linop):
 
     def _adjoint_linop(self):
         pass
+
+class RigidTransformCudaOptimzied:
+    """
+    Rigid-body 3D transform via three shear steps + translation.
+    Supports CPU (NumPy+SciPy) and GPU (CuPy+FFT-plan) backends.
+    """
+    def __init__(self, parameters, kgrid, rkgrid, inverse=False):
+        self.params = parameters
+        self.kgrid = kgrid
+        self.rkgrid = rkgrid
+        self.inverse = inverse
+
+    def _xp(self, x):
+        return cp.get_array_module(x)
+
+    def _compute_translation_factor(self, kgrid, q1,q2,q3, inverse=False):
+        k1, k2, k3 = kgrid.values()
+        xp = sp.get_array_module(k1)
+        factor = xp.exp(-1j * (q1 * k1 + q2 * k2 + q3 * k3))
+        return factor if not inverse else factor.conj()
+
+    def apply(self, x, out=None):
+        xp = self._xp(x)
+        arr = out if out is not None else x.copy()
+        q1, q2, q3, t1, t2, t3 = self.params
+        steps = [
+            (t1, self.rkgrid['tan']['x'], self.rkgrid['sin']['x'], 1, 2),
+            (t2, self.rkgrid['tan']['y'], self.rkgrid['sin']['y'], 2, 0),
+            (t3, self.rkgrid['tan']['z'], self.rkgrid['sin']['z'], 0, 1)
+        ]
+
+        # Shear sequence with orthonormal norm
+        for theta, rk_tan, rk_sin, ax_t, ax_s in steps:
+            vtan = _compute_shear_factor(rk_tan, theta, 'tan', self.inverse)
+            vsin = _compute_shear_factor(rk_sin, theta, 'sin', self.inverse)
+
+            if xp is cp:
+                arr = gpu_fft(arr, axis=ax_t, overwrite_x=True, norm='ortho')
+                xp.multiply(arr, vtan, out=arr)
+                arr = gpu_ifft(arr, axis=ax_t, overwrite_x=True, norm='ortho')
+            else:
+                arr = xp.fft.fftn(arr, axes=(ax_t,), norm='ortho')
+                arr *= vtan
+                arr = xp.fft.ifftn(arr, axes=(ax_t,), norm='ortho')
+            
+            # sin-axis shear
+            if xp is cp:
+                arr = gpu_fft(arr, axis=ax_s, overwrite_x=True, norm='ortho')
+                xp.multiply(arr, vsin, out=arr)
+                arr = gpu_ifft(arr, axis=ax_s, overwrite_x=True, norm='ortho')
+            else:
+                arr = xp.fft.fftn(arr, axes=(ax_s,), norm='ortho')
+                arr *= vsin
+                arr = xp.fft.ifftn(arr, axes=(ax_s,), norm='ortho')
+            
+            # repeat tan-axis
+            if xp is cp:
+                arr =gpu_fft(arr, axis=ax_t, overwrite_x=True, norm='ortho')
+                xp.multiply(arr, vtan, out=arr)
+                arr = gpu_ifft(arr, axis=ax_t, overwrite_x=True, norm='ortho')
+            else:
+                arr = xp.fft.fftn(arr, axes=(ax_t,), norm='ortho')
+                arr *= vtan
+                arr = xp.fft.ifftn(arr, axes=(ax_t,), norm='ortho')
+
+        # Translation with orthonormal norm
+        U = self._compute_translation_factor(self.kgrid, q1, q2, q3, self.inverse)
+        if xp is cp:
+            arr = gpu_fftn(arr, axes=tuple(range(-3,0)), overwrite_x=True, norm='ortho')
+            xp.multiply(arr, U, out=arr)
+            arr = gpu_ifftn(arr, axes=tuple(range(-3,0)), overwrite_x=True, norm='ortho')
+        else:
+            arr = xp.fft.fftn(arr, axes=tuple(range(arr.ndim)), norm='ortho')
+            arr *= U
+            arr = xp.fft.ifftn(arr, axes=tuple(range(arr.ndim)), norm='ortho')
+
+        return arr
+
+    def adjoint(self, x, out=None):
+        xp = self._xp(x)
+        arr = out if out is not None else x.copy()
+
+        q1, q2, q3, t1, t2, t3 = self.params
+        steps = [
+            (t1, self.rkgrid['tan']['x'], self.rkgrid['sin']['x'], 1, 2),
+            (t2, self.rkgrid['tan']['y'], self.rkgrid['sin']['y'], 2, 0),
+            (t3, self.rkgrid['tan']['z'], self.rkgrid['sin']['z'], 0, 1)
+        ]
+
+        # Translation with orthonormal norm
+        U = self._compute_translation_factor(self.kgrid, q1, q2, q3, True)
+        if xp is cp:
+            arr = gpu_fftn(arr, axes=tuple(range(-3,0)), overwrite_x=True, norm='ortho')
+            xp.multiply(arr, U, out=arr)
+            arr = gpu_ifftn(arr, axes=tuple(range(-3,0)), overwrite_x=True, norm='ortho')
+        else:
+            arr = xp.fft.fftn(arr, axes=tuple(range(arr.ndim)), norm='ortho')
+            arr *= U
+            arr = xp.fft.ifftn(arr, axes=tuple(range(arr.ndim)), norm='ortho')
+
+        # Shear sequence with orthonormal norm
+        for theta, rk_tan, rk_sin, ax_t, ax_s in steps[::-1]:
+            vtan = _compute_shear_factor(rk_tan, theta, 'tan', True)
+            vsin = _compute_shear_factor(rk_sin, theta, 'sin', True)
+
+            # tan-axis shear
+            if xp is cp:
+                arr = gpu_fft(arr, axis=ax_t, overwrite_x=False, norm='ortho')
+                xp.multiply(arr, vtan, out=arr)
+                arr = gpu_ifft(arr, axis=ax_t, overwrite_x=False, norm='ortho')
+            else:
+                arr = xp.fft.fftn(arr, axes=(ax_t,), norm='ortho')
+                arr *= vtan
+                arr = xp.fft.ifftn(arr, axes=(ax_t,), norm='ortho')
+            
+            # sin-axis shear
+            if xp is cp:
+                arr = gpu_fft(arr, axis=ax_s, overwrite_x=True, norm='ortho')
+                xp.multiply(arr, vsin, out=arr)
+                arr = gpu_ifft(arr, axis=ax_s, overwrite_x=True, norm='ortho')
+            else:
+                arr = xp.fft.fftn(arr, axes=(ax_s,), norm='ortho')
+                arr *= vsin
+                arr = xp.fft.ifftn(arr, axes=(ax_s,), norm='ortho')
+            
+            # repeat tan-axis
+            if xp is cp:
+                arr =gpu_fft(arr, axis=ax_t, overwrite_x=True, norm='ortho')
+                xp.multiply(arr, vtan, out=arr)
+                arr = gpu_ifft(arr, axis=ax_t, overwrite_x=True, norm='ortho')
+            else:
+                arr = xp.fft.fftn(arr, axes=(ax_t,), norm='ortho')
+                arr *= vtan
+                arr = xp.fft.ifftn(arr, axes=(ax_t,), norm='ortho')
+
+        return arr

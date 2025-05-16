@@ -3,3 +3,5 @@
 sample
 __pycache__
 data
+notebooks
+.ipynb_checkpoints

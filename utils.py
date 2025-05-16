@@ -87,3 +87,32 @@ def generate_motion_corruption(img, mps, bins, bin_axis=1, transforms=None, devi
         T = RigidTransform(img.shape, img.shape, transforms[shot_idx], kgrid, rkgrid)
         ksp += (A * F * S * T * img)
     return ksp, transforms, shot_mask
+
+def compute_transform_grids_voxel(shape, voxel_size, xp=np):
+    nx, ny, nz = shape
+    vx, vy, vz = voxel_size
+    
+    rx = xp.fft.fftshift((xp.arange(-nx//2, nx//2) * vx).reshape(-1,1,1))
+    ry = xp.fft.fftshift((xp.arange(-ny//2, ny//2) * vy).reshape(1,-1,1))
+    rz = xp.fft.fftshift((xp.arange(-nz//2, nz//2) * vz).reshape(1,1,-1))
+
+    kx =  xp.fft.fftshift(xp.linspace(-xp.pi,  xp.pi, nx, endpoint=False).reshape((-1,1,1)))
+    ky =  xp.fft.fftshift(xp.linspace(-xp.pi,  xp.pi, ny, endpoint=False).reshape((1,-1,1)))
+    kz =  xp.fft.fftshift(xp.linspace(-xp.pi,  xp.pi, nz, endpoint=False).reshape((1,1,-1)))
+
+    kgrid = {'x': kx, 'y': ky, 'z': kz }
+                     
+    rkgrid = {
+        'tan': {
+            'x': rz * ky, # rotation around x-axis (tan-shears: y↔z typically)
+            'y': rx * kz, # rotation around y-axis (tan-shears: x↔z)
+            'z': ry * kx  # rotation around z-axis (tan-shears: x↔y)
+        },
+        'sin': {
+            'x': ry * kz, # rotation around x-axis (sin-shears: y↔z typically)
+            'y': rz * kx, # rotation around y-axis (sin-shears: x↔z)
+            'z': rx * ky  # rotation around z-axis (sin-shears: x↔y)
+        }
+    }
+
+    return kgrid, rkgrid
