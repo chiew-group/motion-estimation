@@ -88,4 +88,4 @@ if __name__ == '__main__':
     recon_fullres = sp.ifft(sp.resize(sp.fft(recon), img_shape))
     
     np.save(os.path.join(args.out_dir, f"recon_{num_shots}shots_{ds_factor}dsfactor.npy"), recon_fullres)
-    np.save(os.path.join(args.out_dir, f"trasnform_{num_shots}shots_{ds_factor}dsfactor.npy"), estimates)
+    np.save(os.path.join(args.out_dir, f"transform_{num_shots}shots_{ds_factor}dsfactor.npy"), estimates)
