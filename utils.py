@@ -50,11 +50,26 @@ def compute_spectral_coord(resolution, device=sp.cpu_device):
     k3 = xp.linspace(-xp.pi,  xp.pi, resolution[2], endpoint=False).reshape((1,1,-1)) #* (1/subsample_resolution[2])
     return k1, k2, k3
 
-def compute_transform_grids(resolution, subsample_resolution=None, device=sp.cpu_device):
-    if subsample_resolution is None:
-        subsample_resolution = resolution
-    r1, r2, r3 = compute_spatial_coord(resolution, subsample_resolution, device=device)
-    k1, k2, k3 = compute_spectral_coord(subsample_resolution, device=device)
+def compute_transform_grids(resolution, downsample_resolution, voxel_size, device=sp.cpu_device):
+    #if subsample_resolution is None:
+    #    subsample_resolution = resolution
+    #r1, r2, r3 = compute_spatial_coord(resolution, subsample_resolution, device=device)
+    #k1, k2, k3 = compute_spectral_coord(subsample_resolution, device=device)
+
+    nx, ny, nz = resolution
+    vx, vy, vz = voxel_size
+    ds_x, ds_y, ds_z = downsample_resolution
+    xp = device.xp
+    factor = [resolution[i]//downsample_resolution[i] for i in range(3)]
+
+    r1 = (xp.linspace(-(nx//2), nx//2, ds_x, endpoint=False) * vx).reshape((-1,1,1))
+    r2 = (xp.linspace(-(ny//2), ny//2, ds_y, endpoint=False) * vy).reshape((1,-1,1))
+    r3 = (xp.linspace(-(nz//2), nz//2, ds_z, endpoint=False) * vz).reshape((1,1,-1))
+    
+    k1 = (xp.linspace(-xp.pi,  xp.pi, ds_x, endpoint=False).reshape((-1,1,1)))
+    k2 = (xp.linspace(-xp.pi,  xp.pi, ds_y, endpoint=False).reshape((1,-1,1)))
+    k3 = (xp.linspace(-xp.pi,  xp.pi, ds_z, endpoint=False).reshape((1,1,-1)))
+
     rkgrid = [[k2 * r3, k3 * r1, k1 * r2], [k3 * r2, k1 * r3, k2 * r1]]
     return [k1, k2, k3], rkgrid
 
