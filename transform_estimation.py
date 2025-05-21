@@ -23,7 +23,12 @@ class LMAlgorithm(sp.alg.Alg):
         #Algorithm State
         self.num_shots = len(transforms)
         self.img_shape = self.img.shape
-        
+
+        xp = sp.get_array_module(self.img)
+        self.partial_buf = xp.zeros((6,) + self.ksp.shape, dtype=img.dtype)
+        self.grad_buf = xp.zeros(6, dtype=float)
+        self.hess_buf = xp.zeros((6,6), dtype=float)
+
         super().__init__(max_iter)
 
     def _update(self):
@@ -46,26 +51,40 @@ class LMAlgorithm(sp.alg.Alg):
             current_error = xp.linalg.norm(resid)
 
             #Compute the partial derive kspaces
-            partials = []
-            gradient = [] 
+            #partials = []
+            #gradient = [] 
             for p_idx in range(6):
                 T = RigidTransformDerivative(self.img_shape, self.img_shape, p_idx, self.transforms[shot_idx], self.kgrid, self.rkgrid)
-                partials.append(A * F * S * T * self.img)
-                
+                #partials.append(A * F * S * T * self.img)
+                self.partial_buf[p_idx] = A * F * S * T * self.img
+                self.grad_buf[p_idx] = xp.vdot(resid, self.partial_buf[p_idx]).real
                 #Compute the gradient of the motion state while we are at it
-                gradient.append(xp.sum(xp.real(resid.conj() * partials[-1])))
-            gradient = xp.array(gradient)
+                #gradient.append(xp.sum(xp.real(resid.conj() * partials[-1])))
+            #gradient = xp.array(gradient)
 
             #Approximate the Hessian matrix from partials
+            """
             hessian = xp.zeros((6,6))
             for row in range(6):
                 for col in range(row, 6):
                     hessian[row, col] = xp.sum(xp.real(partials[row].conj() * partials[col]))
             i_lower = xp.tril_indices(6, -1)
             hessian[i_lower] = hessian.T[i_lower]
-    
-            hessian += self.damp[shot_idx] * xp.eye(6)
-            delta = xp.linalg.lstsq(hessian, gradient, rcond=None)[0]
+            """
+            for i in range(6):
+                pi = self.partial_buf[i]
+                for j in range(i, 6):
+                    val = xp.vdot(pi, self.partial_buf[j]).real
+                    if i == j:
+                        self.hess_buf[i,i] = val + self.damp[shot_idx]
+                    else:
+                        self.hess_buf[i, j] = val
+                        self.hess_buf[j, i] = val
+            
+            #hessian += self.damp[shot_idx] * xp.eye(6)
+            #delta = xp.linalg.lstsq(hessian, gradient, rcond=None)[0]
+            #self.hess_buf 
+            delta = xp.linalg.solve(self.hess_buf, self.grad_buf)
             next_transform = self.transforms[shot_idx] - delta
             
             #Calculate the resid for the new transform
