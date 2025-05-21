@@ -124,7 +124,7 @@ if __name__ == '__main__':
             corruption_mask[s*16+i, :, i*corr_bin_size:(i+1)*corr_bin_size] = shot_mask[s, :, i*corr_bin_size:(i+1)*corr_bin_size]
     #pl.ImagePlot(corruption_mask) 
     #Generate corrupted kspace and save corrupted image
-    kgrid, rkgrid = compute_transform_grids(ground_truth.shape)
+    kgrid, rkgrid = compute_transform_grids(ground_truth.shape, ground_truth.shape, [1.5, 1.875, 2])
     S = sp.mri.linop.Sense(mps)
     ksp = 0
     for s in range(corruption_mask.shape[0]):
@@ -148,7 +148,7 @@ if __name__ == '__main__':
     init_image_guess = sense_recon.copy() if args.sense else None
 
 
-    kgrid, rkgrid = compute_transform_grids(ground_truth.shape, device=exp_device)
+    kgrid, rkgrid = compute_transform_grids(ground_truth.shape, ground_truth.shape, [1.5, 1.875, 2], device=exp_device)
     recon, estimates = JointEstimation(ksp, mps, shot_mask, kgrid, rkgrid, 
                             device=exp_device, P=P, constraint=M, img=init_image_guess, 
                             max_joint_iter=args.max_iter, tol=1e-12).run()
@@ -178,7 +178,7 @@ if __name__ == '__main__':
         log_file.write(f"SSIM joint recon: {ssim_joint_recon}\n\n")
         log_file.write("Final transform estimates, rotations in degrees\n")
         estimates[:, 3:] = estimates[:, 3:] * 180 / np.pi
-        for s in range(num_recon_shots): 
+        for s in range(estimates.shape[0]): 
             log_file.write(f"Shot #{s+1}: ")
             log_file.write(",  ".join(f"{val:.3f}" for val in estimates[s]) + "\n")
 

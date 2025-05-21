@@ -58,7 +58,7 @@ if __name__ == '__main__':
     import sigpy.plot as pl
     #pl.ImagePlot(shot_mask)
     #Generate corrupted kspace and save corrupted image
-    kgrid, rkgrid = compute_transform_grids(ground_truth.shape)
+    kgrid, rkgrid = compute_transform_grids(ground_truth.shape, ground_truth.shape, [1.5, 1.875, 2])
     S = sp.mri.linop.Sense(mps)
     ksp = 0
     for s in range(num_shots):
@@ -88,7 +88,7 @@ if __name__ == '__main__':
         shot_mask[s, shot_size*s:(s+1)*shot_size] = master_mask[shot_size*s:(s+1)*shot_size]
 
 
-    kgrid, rkgrid = compute_transform_grids(ground_truth.shape, device=exp_device)
+    kgrid, rkgrid = compute_transform_grids(ground_truth.shape, ground_truth.shape, [1.5, 1.875, 2], device=exp_device)
     recon, estimates = JointEstimation(ksp, mps, shot_mask, kgrid, rkgrid, 
                             device=exp_device, P=P, constraint=M, img=init_image_guess, 
                             max_joint_iter=args.max_iter, tol=1e-12).run()
