@@ -272,8 +272,8 @@ class RigidTransformCudaOptimzied:
 
         # Shear sequence with orthonormal norm
         for theta, rk_tan, rk_sin, ax_t, ax_s in steps:
-            vtan = _compute_shear_factor(rk_tan, theta, 'tan', self.inverse)
-            vsin = _compute_shear_factor(rk_sin, theta, 'sin', self.inverse)
+            vtan = xp.exp(1j * xp.tan(theta/2) * rk_tan, dtype=xp.complex64)
+            vsin = xp.exp(-1j * xp.sin(theta) * rk_sin, dtype=xp.complex64)
 
             if xp is cp:
                 arr = gpu_fft(arr, axis=ax_t, overwrite_x=True, norm='ortho')
@@ -375,3 +375,130 @@ class RigidTransformCudaOptimzied:
                 arr = xp.fft.ifftn(arr, axes=(ax_t,), norm='ortho')
 
         return arr
+    
+class RigidTransformDerivativeCuda:
+    def __init__(self, shape, parameters, kgrid, rkgrid):
+        self.parameters = parameters
+        self.kgrid = kgrid
+        self.rkgrid = rkgrid
+
+        #Preallocated result buffer and two intermediates for derivative calculations
+        #This way we can retain the parameters and apply the transforms continually for
+        #which ever partial derivative index
+        self.out = cp.empty(shape, dtype=cp.complex64)
+        self.s2 = cp.empty_like(self.out)
+        self.s3 = cp.empty_like(self.out)
+
+    def _rotation(self, theta, rk_tan, rk_sin, ax_t, ax_s):
+        xp = cp
+        vtan = xp.exp(1j * xp.tan(theta/2) * rk_tan, dtype=xp.complex64)
+        vsin = xp.exp(-1j * xp.sin(theta) * rk_sin, dtype=xp.complex64)
+
+        self.out = gpu_fft(self.out, axis=ax_t, overwrite_x=True, norm='ortho')
+        xp.multiply(self.out, vtan, out=self.out)
+        self.out = gpu_ifft(self.out, axis=ax_t, overwrite_x=True, norm='ortho')
+        
+        # sin-axis shear
+        self.out = gpu_fft(self.out, axis=ax_s, overwrite_x=True, norm='ortho')
+        xp.multiply(self.out, vsin, out=self.out)
+        self.out = gpu_ifft(self.out, axis=ax_s, overwrite_x=True, norm='ortho')
+
+        # repeat tan-axis
+        self.out =gpu_fft(self.out, axis=ax_t, overwrite_x=True, norm='ortho')
+        xp.multiply(self.out, vtan, out=self.out)
+        self.out = gpu_ifft(self.out, axis=ax_t, overwrite_x=True, norm='ortho')
+
+    def _translation(self):
+        xp = cp
+        # Translation with orthonormal norm
+        #U = self._compute_translation_factor(self.kgrid, q1, q2, q3, self.inverse)
+        k1, k2, k3 = self.kgrid.values()
+        q1, q2, q3 = self.parameters[:3]
+        factor = xp.exp(-1j * (q1 * k1 + q2 * k2 + q3 * k3))
+        self.out = gpu_fftn(self.out, axes=tuple(range(-3,0)), overwrite_x=True, norm='ortho')
+        xp.multiply(self.out, factor, out=self.out)
+        self.out = gpu_ifftn(self.out, axes=tuple(range(-3,0)), overwrite_x=True, norm='ortho')
+
+    def _translation_derivative(self, p_idx):
+        xp = cp
+        k1, k2, k3 = self.kgrid.values()
+        q1, q2, q3 = self.parameters[:3]
+        key = {0:'x', 1:'y', 2:'z'}
+        pk = self.kgrid[key[p_idx]]
+        factor = -1j * pk * xp.exp(-1j * (q1 * k1 + q2 * k2 + q3 * k3))
+        self.out = gpu_fftn(self.out, axes=tuple(range(-3,0)), overwrite_x=True, norm='ortho')
+        xp.multiply(self.out, factor, out=self.out)
+        self.out = gpu_ifftn(self.out, axes=tuple(range(-3,0)), overwrite_x=True, norm='ortho')
+
+    def _rotation_derivative(self, theta, rk_tan, rk_sin, tan_axis, sin_axis):
+        xp = cp
+        vtan = xp.exp(1j * xp.tan(theta/2) * rk_tan, dtype=xp.complex64)
+        vsin = xp.exp(-1j * xp.sin(theta) * rk_sin, dtype=xp.complex64)
+        vtan_derivative = (1j * ((1 + (xp.tan(theta/2) ** 2)) / 2) * rk_tan * vtan).astype(xp.complex64)
+        vsin_derivative = (-1j * xp.cos(theta) * rk_sin * vsin).astype(xp.complex64)
+
+        self.out = gpu_fft(self.out, axis=tan_axis, overwrite_x=True, norm='ortho')
+        self.s2[:] = self.out
+        self.s3[:] = self.out
+        
+        cp.multiply(self.out, vtan_derivative, out=self.out)
+        self.out[:] = gpu_ifft(self.out, axis=tan_axis, overwrite_x=True, norm='ortho')
+        self.out[:] = gpu_fft(self.out, axis=sin_axis, overwrite_x=True, norm='ortho')
+        cp.multiply(self.out, vsin, out=self.out)
+        self.out[:] = gpu_ifft(self.out, axis=sin_axis, overwrite_x=True, norm='ortho')
+        self.out[:] = gpu_fft(self.out, axis=tan_axis, overwrite_x=True, norm='ortho')
+        cp.multiply(self.out, vtan, out=self.out)
+
+        cp.multiply(self.s2, vtan, out=self.s2)
+        self.s2[:] = gpu_ifft(self.s2, axis=tan_axis, overwrite_x=True, norm='ortho')
+        self.s2[:] = gpu_fft(self.s2, axis=sin_axis, overwrite_x=True, norm='ortho')
+        cp.multiply(self.s2, vsin_derivative, out=self.s2)
+        self.s2[:] = gpu_ifft(self.s2, axis=sin_axis, overwrite_x=True, norm='ortho')
+        self.s2[:] = gpu_fft(self.s2, axis=tan_axis, overwrite_x=True, norm='ortho')
+        cp.multiply(self.s2, vtan, out=self.s2)
+
+
+        cp.multiply(self.s3, vtan, out=self.s3)
+        self.s3[:] = gpu_ifft(self.s3, axis=tan_axis, overwrite_x=True, norm='ortho')
+        self.s3[:] = gpu_fft(self.s3, axis=sin_axis, overwrite_x=True, norm='ortho')
+        cp.multiply(self.s3, vsin, out=self.s3)
+        self.s3[:] = gpu_ifft(self.s3, axis=sin_axis, overwrite_x=True, norm='ortho')
+        self.s3[:] = gpu_fft(self.s3, axis=tan_axis, overwrite_x=True, norm='ortho')
+        cp.multiply(self.s3, vtan_derivative, out=self.s3)
+
+        # out = out + s2 + s3 in-place
+        cp.add(self.out, self.s2, out=self.out)
+        cp.add(self.out, self.s3, out=self.out)
+
+        # last IFFT
+        self.out = gpu_ifft(self.out, axis=tan_axis, overwrite_x=True, norm='ortho')
+    
+    def apply(self, input, p_idx):
+        theta1, theta2, theta3 = self.parameters[3:]
+        self.out[:] = input
+
+        if p_idx < 3:                
+            self._rotation(theta3, self.rkgrid['tan']['z'], self.rkgrid['sin']['z'], 0, 1)
+            self._rotation(theta2, self.rkgrid['tan']['y'], self.rkgrid['sin']['y'], 2, 0)
+            self._rotation(theta1, self.rkgrid['tan']['x'], self.rkgrid['sin']['x'], 1, 2)
+            self._translation_derivative(p_idx)
+
+        elif p_idx == 3:
+            self._rotation(theta3, self.rkgrid['tan']['z'], self.rkgrid['sin']['z'], 0, 1)
+            self._rotation(theta2, self.rkgrid['tan']['y'], self.rkgrid['sin']['y'], 2, 0)
+            self._rotation_derivative(theta1, self.rkgrid['tan']['x'], self.rkgrid['sin']['x'], 1, 2)
+            self._translation()
+
+        elif p_idx == 4:
+            self._rotation(theta3, self.rkgrid['tan']['z'], self.rkgrid['sin']['z'], 0, 1)
+            self._rotation_derivative(theta2, self.rkgrid['tan']['y'], self.rkgrid['sin']['y'], 2, 0)
+            self._rotation(theta1, self.rkgrid['tan']['x'], self.rkgrid['sin']['x'], 1, 2)
+            self._translation()
+
+        elif p_idx == 5:
+            self._rotation_derivative(theta3, self.rkgrid['tan']['z'], self.rkgrid['sin']['z'], 0, 1)
+            self._rotation(theta2, self.rkgrid['tan']['y'], self.rkgrid['sin']['y'], 2, 0)
+            self._rotation(theta1, self.rkgrid['tan']['x'], self.rkgrid['sin']['x'], 1, 2)
+            self._translation()
+
+        return self.out.copy()
