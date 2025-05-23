@@ -107,9 +107,9 @@ def compute_transform_grids_voxel(shape, voxel_size, xp=np):
     nx, ny, nz = shape
     vx, vy, vz = voxel_size
     
-    rx = xp.fft.fftshift((xp.arange(-nx//2, nx//2) * vx).reshape(-1,1,1))
-    ry = xp.fft.fftshift((xp.arange(-ny//2, ny//2) * vy).reshape(1,-1,1))
-    rz = xp.fft.fftshift((xp.arange(-nz//2, nz//2) * vz).reshape(1,1,-1))
+    rx = xp.fft.fftshift((xp.linspace(-nx//2, nx//2, nx, endpoint=False) * vx).reshape(-1,1,1))
+    ry = xp.fft.fftshift((xp.linspace(-ny//2, ny//2, ny, endpoint=False) * vy).reshape(1,-1,1))
+    rz = xp.fft.fftshift((xp.linspace(-nz//2, nz//2, nz, endpoint=False) * vz).reshape(1,1,-1))
 
     kx =  xp.fft.fftshift(xp.linspace(-xp.pi,  xp.pi, nx, endpoint=False).reshape((-1,1,1)))
     ky =  xp.fft.fftshift(xp.linspace(-xp.pi,  xp.pi, ny, endpoint=False).reshape((1,-1,1)))
