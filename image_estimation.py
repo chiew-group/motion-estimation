@@ -178,7 +178,7 @@ def estimate_image_cg(
     rsold = xp.real(xp.vdot(r, r))
     resid = rsold.item() ** 0.5 
     temp = xp.empty_like(x)
-    for it in tqdm(range(max_iter)):
+    for it in range(max_iter):
         A_func(p, out=Ap)
         pAp = xp.real(xp.vdot(p, Ap)).item()
         alpha = rsold / pAp
@@ -202,5 +202,4 @@ def estimate_image_cg(
         rsold = rsnew
         resid = rsold.item() ** 0.5
 
-    print(resid)
     return x
