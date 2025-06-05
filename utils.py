@@ -103,17 +103,20 @@ def generate_motion_corruption(img, mps, bins, bin_axis=1, transforms=None, devi
         ksp += (A * F * S * T * img)
     return ksp, transforms, shot_mask
 
-def compute_transform_grids_voxel(shape, voxel_size, xp=np):
+def compute_transform_grids_voxel(shape, voxel_size, downsample_res=None, xp=np):
     nx, ny, nz = shape
     vx, vy, vz = voxel_size
-    
-    rx = xp.fft.fftshift((xp.linspace(-nx//2, nx//2, nx, endpoint=False) * vx).reshape(-1,1,1))
-    ry = xp.fft.fftshift((xp.linspace(-ny//2, ny//2, ny, endpoint=False) * vy).reshape(1,-1,1))
-    rz = xp.fft.fftshift((xp.linspace(-nz//2, nz//2, nz, endpoint=False) * vz).reshape(1,1,-1))
+    if downsample_res is None:
+        downsample_res = shape
+    ds_x, ds_y, ds_z = downsample_res
 
-    kx =  xp.fft.fftshift(xp.linspace(-xp.pi,  xp.pi, nx, endpoint=False).reshape((-1,1,1)))
-    ky =  xp.fft.fftshift(xp.linspace(-xp.pi,  xp.pi, ny, endpoint=False).reshape((1,-1,1)))
-    kz =  xp.fft.fftshift(xp.linspace(-xp.pi,  xp.pi, nz, endpoint=False).reshape((1,1,-1)))
+    rx = xp.fft.fftshift((xp.linspace(-nx//2, nx//2, ds_x, endpoint=False) * vx).reshape(-1,1,1))
+    ry = xp.fft.fftshift((xp.linspace(-ny//2, ny//2, ds_y, endpoint=False) * vy).reshape(1,-1,1))
+    rz = xp.fft.fftshift((xp.linspace(-nz//2, nz//2, ds_z, endpoint=False) * vz).reshape(1,1,-1))
+
+    kx =  xp.fft.fftshift(xp.linspace(-xp.pi,  xp.pi, ds_x, endpoint=False).reshape((-1,1,1)))
+    ky =  xp.fft.fftshift(xp.linspace(-xp.pi,  xp.pi, ds_y, endpoint=False).reshape((1,-1,1)))
+    kz =  xp.fft.fftshift(xp.linspace(-xp.pi,  xp.pi, ds_z, endpoint=False).reshape((1,1,-1)))
 
     kgrid = {'x': kx, 'y': ky, 'z': kz }
                      
