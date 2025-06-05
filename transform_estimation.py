@@ -1,5 +1,7 @@
 import sigpy as sp
-from transform import RigidTransform, RigidTransformDerivative
+from transform import RigidTransform, RigidTransformDerivative, RigidTransformDerivativeCuda, RigidTransformCudaOptimzied
+import cupy as cp
+from cupyx.scipy.fft import fftn as gpu_fftn, ifftn as gpu_ifftn
 
 class LMAlgorithm(sp.alg.Alg):
     def __init__(self, ksp, mps, shot_mask, 
@@ -131,3 +133,83 @@ class TransformEstimation(sp.app.App):
         
         sp.copyto(self.img, next_img)
         self.transforms -= mean_transform
+
+def estimate_transform(ksp, mps, shot_mask, image, kgrid, rkgrid, damp, convergence_flags,
+                       residual_buf, partial_buf, gradient_buf, hessian_buf,
+                       transforms=None, max_iter=10, tol=1e-6,
+                       ):
+    
+    xp = cp.get_array_module(ksp)
+    nshots = shot_mask.shape[0]
+
+    for s in range(nshots):
+        #First projection to get current error
+        T = RigidTransformCudaOptimzied(transforms[s], kgrid, rkgrid)
+        xp.multiply(mps, T.apply(image), out=residual_buf)
+        residual_buf = gpu_fftn(residual_buf, axes=(-3,-2,-1), norm='ortho', overwrite_x=True)
+        xp.subtract(residual_buf, ksp, out=residual_buf)
+        xp.multiply(residual_buf, shot_mask[s], out=residual_buf)
+        #resid = A * F * S * resid - (A*ksp)
+        e0 = xp.vdot(residual_buf, residual_buf).real
+
+        #For each of the 6 parameters we calculate the partial derivative and cache
+        #correct passed in buffer that way allocation of these only happens once in the joint class
+        dT = RigidTransformDerivativeCuda(image.shape, transforms[s], kgrid, rkgrid)
+        for p_idx in range(6):
+            #T = RigidTransformDerivative(self.img_shape, self.img_shape, p_idx, self.transforms[shot_idx], self.kgrid, self.rkgrid)
+            #partials.append(A * F * S * T * self.img)
+            
+            #partial_buf[p_idx] = A * F * S * (dT.apply(self.img, p_idx))
+            xp.multiply(mps, dT.apply(image, p_idx), out=partial_buf[p_idx])
+            partial_buf[p_idx] = gpu_fftn(partial_buf[p_idx], axes=(-3,-2,-1), norm='ortho', overwrite_x=True)
+            xp.multiply(shot_mask[s], partial_buf[p_idx])
+            
+            gradient_buf[p_idx] = xp.vdot(residual_buf, partial_buf[p_idx]).real
+        
+        
+        for i in range(6):
+            pi = partial_buf[i]
+            for j in range(i, 6):
+                val = xp.vdot(pi, partial_buf[j]).real
+                if i == j:
+                    hessian_buf[i,j] = val + damp[s]
+                else:
+                    hessian_buf[i, j] = val
+                    hessian_buf[j, i] = val
+        #Solve for delta step and estimate the Hessian matrix from Jacobians, then compute next error
+        delta = xp.linalg.solve(hessian_buf, gradient_buf)
+        next_transform = transforms[s] - delta
+        
+        #Calculate the resid for the new transform
+        #T = RigidTransform(self.img_shape, self.img_shape, next_transform, self.kgrid, self.rkgrid)
+        T = RigidTransformCudaOptimzied(next_transform, kgrid, rkgrid)
+        #resid = (A * F * S * T * self.img) - (A*self.ksp)
+        xp.multiply(mps, T.apply(image), out=residual_buf)
+        residual_buf = gpu_fftn(residual_buf, axes=(-3,-2,-1), norm='ortho', overwrite_x=True)
+        xp.subtract(residual_buf, ksp, out=residual_buf)
+        xp.multiply(residual_buf, shot_mask[s], out=residual_buf)
+        
+        #next_error = xp.linalg.norm(resid)
+        e1 = xp.vdot(residual_buf, residual_buf).real
+
+        #Check candidate for update and if so check partial convergence for this motion state
+        if e1 < e0:
+            if (transforms[s] - next_transform < tol).all():
+                convergence_flags[s] = True
+            transforms[s] = next_transform.copy()
+            damp[s] = xp.maximum(damp[s] / 3, 1e-4)
+        else:
+            damp[s] = xp.minimum(damp[s] * 1.5, 1e16)
+
+    #Post transform update we subtract the mean to prevent drifting of the image
+    mean_transform = xp.mean(transforms, axis=0)
+    T = RigidTransformCudaOptimzied(next_transform, kgrid, rkgrid)
+    image = T.apply(image)
+
+    #if self.constraint is not None:
+    #    self.constraint = sp.to_device(self.constraint, self.device)
+    #    next_img *= self.constraint
+
+    #sp.copyto(self.img, next_img)
+    xp.subtract(transforms, mean_transform, out=transforms)
+    #transforms -= mean_transform
