@@ -2,11 +2,9 @@ import argparse
 import numpy as np
 import cupy as cp
 import sigpy as sp
-import cupyx.scipy.ndimage as ndi
 from tqdm import tqdm
 from math import prod #Cupy prod doesn't work on tuples like numpy
 from pathlib import Path
-
 
 def hankel_fwd(x, kernel_size, dims_in):
     xp = cp.get_array_module(x)
@@ -267,12 +265,7 @@ if __name__ == '__main__':
                          eig_thresh=args.eig_thresh, 
                          mask_thresh=args.mask_thresh)
     mps = mps.transpose((3,0,1,2))
-    #factor = [full / ds for full, ds in zip(full_imsize, imsize)]
-    #factor = [1] + factor
-    #mps = ndi.zoom(mps, factor)
-    
-    import sigpy.plot as pl
-    pl.ImagePlot(mps)
+
     # Save maps
     #maps = cp.asnumpy(maps)
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
