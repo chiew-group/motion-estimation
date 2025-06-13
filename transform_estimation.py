@@ -2,6 +2,7 @@ import sigpy as sp
 from transform import RigidTransform, RigidTransformDerivative, RigidTransformDerivativeCuda, RigidTransformCudaOptimzied
 import cupy as cp
 from cupyx.scipy.fft import fftn as gpu_fftn, ifftn as gpu_ifftn
+import numpy as np 
 
 class LMAlgorithm(sp.alg.Alg):
     def __init__(self, ksp, mps, shot_mask, 
@@ -162,7 +163,7 @@ def estimate_transform(ksp, mps, shot_mask, image, kgrid, rkgrid, damp, converge
             #partial_buf[p_idx] = A * F * S * (dT.apply(self.img, p_idx))
             xp.multiply(mps, dT.apply(image, p_idx), out=partial_buf[p_idx])
             partial_buf[p_idx] = gpu_fftn(partial_buf[p_idx], axes=(-3,-2,-1), norm='ortho', overwrite_x=True)
-            xp.multiply(shot_mask[s], partial_buf[p_idx])
+            xp.multiply(shot_mask[s], partial_buf[p_idx], out=partial_buf[p_idx])
             
             gradient_buf[p_idx] = xp.vdot(residual_buf, partial_buf[p_idx]).real
         
@@ -176,6 +177,7 @@ def estimate_transform(ksp, mps, shot_mask, image, kgrid, rkgrid, damp, converge
                 else:
                     hessian_buf[i, j] = val
                     hessian_buf[j, i] = val
+
         #Solve for delta step and estimate the Hessian matrix from Jacobians, then compute next error
         delta = xp.linalg.solve(hessian_buf, gradient_buf)
         next_transform = transforms[s] - delta
@@ -197,19 +199,14 @@ def estimate_transform(ksp, mps, shot_mask, image, kgrid, rkgrid, damp, converge
             if (transforms[s] - next_transform < tol).all():
                 convergence_flags[s] = True
             transforms[s] = next_transform.copy()
-            damp[s] = xp.maximum(damp[s] / 3, 1e-4)
+            damp[s] = xp.maximum(damp[s] / 5, 1e-4)
         else:
             damp[s] = xp.minimum(damp[s] * 1.5, 1e16)
 
     #Post transform update we subtract the mean to prevent drifting of the image
     mean_transform = xp.mean(transforms, axis=0)
-    T = RigidTransformCudaOptimzied(next_transform, kgrid, rkgrid)
-    image = T.apply(image)
-
-    #if self.constraint is not None:
-    #    self.constraint = sp.to_device(self.constraint, self.device)
-    #    next_img *= self.constraint
-
-    #sp.copyto(self.img, next_img)
+    T = RigidTransformCudaOptimzied(mean_transform, kgrid, rkgrid)
+    out = T.apply(image)
     xp.subtract(transforms, mean_transform, out=transforms)
-    #transforms -= mean_transform
+
+    return out
