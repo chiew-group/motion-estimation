@@ -74,7 +74,7 @@ def plot_joint_recon_summary(loss_list, t_list, shot_idx=0, save_path=None):
     fig, axs = plt.subplots(3, 1, figsize=(10, 8), sharex=True)
 
     # 1. Objective function loss
-    axs[0].plot(iters, loss_list, marker='o', color='black')
+    axs[0].plot(iters, np.log10(loss_list), marker='o', color='black')
     axs[0].set_ylabel("Objective")
     axs[0].set_title("Objective Function Over Iterations")
     axs[0].grid(True)
@@ -119,6 +119,8 @@ if __name__ == '__main__':
     parser.add_argument('--shots', type=int, required=True, help='Number of motion states/shots to recon for')
     parser.add_argument('--t0', type=str, default=None, help='Initial transform parameters .npy file')
     parser.add_argument('--lowres', type=float, default=1.0, help='Downsample factor')
+    parser.add_argument('--cg_iter', type=int, default=5, help='Max iterations for CG estimation')
+    parser.add_argument('--nm_iter', type=int, default=1, help='Max iterations for NM estimation')
     parser.add_argument('--max_iter', type=int, default=100, help='Max iterations for joint recon')
     args = parser.parse_args()
 
@@ -137,26 +139,31 @@ if __name__ == '__main__':
     #Create sequential shot mask based on indexing axis 1
     #This can be modified later on as a todo
     #Also we can change this so as to input your own mask as a npy array
-    rss_ksp = np.sum(np.abs(ksp)**2, axis=0, dtype=bool)
-    shot_mask = np.zeros([num_shots, *ksp.shape[1:]], dtype=bool)
+    rss_ksp = np.sum(np.abs(ksp)**2, axis=0, dtype=np.bool)
+    shot_mask = np.zeros([num_shots, *ksp.shape[1:]], dtype=np.bool)
     for s in range(num_shots):
         shot_mask[s, :, s*shot_size:(s+1)*shot_size] = rss_ksp[:, s*shot_size:(s+1)*shot_size, :]
+    voxel = [0.8,0.8,0.8]
+    ds_shape = None
 
-    #Resizing to downsample factor, if 1 things will be unchanged
-    ds_shape = [int(full_res[0]//args.lowres), full_res[1], int(full_res[2]//args.lowres)]
-    print(ds_shape)
-    ksp = sp.resize(ksp, [ncoils] + ds_shape)
-    mps = sp.ifft(sp.resize(sp.fft(mps, axes=(-3,-2,-1)), [ncoils] + ds_shape), axes=(-3,-2,-1))
-    shot_mask = sp.resize(shot_mask, [num_shots] + ds_shape)
-    print(f"ksp: {ksp.shape}, mps: {mps.shape}, mask: {shot_mask.shape}")
+    if args.lowres > 1:
+        #Resizing to downsample factor, if 1 things will be unchanged
+        ds_shape = [int(full_res[0]//args.lowres), full_res[1], int(full_res[2]//args.lowres)]
+        print(ds_shape)
+        ksp = sp.resize(ksp, [ncoils] + ds_shape)
+        mps = sp.ifft(sp.resize(sp.fft(mps, axes=(-3,-2,-1)), [ncoils] + ds_shape), axes=(-3,-2,-1))
+        shot_mask = sp.resize(shot_mask, [num_shots] + ds_shape)
+        print(f"ksp: {ksp.shape}, mps: {mps.shape}, mask: {shot_mask.shape}")
+        voxel = [0.8*args.lowres,0.8, 0.8*args.lowres]
 
     #RECON
-    kgrid, rkgrid = compute_transform_grids_voxel(full_res, [0.8/args.lowres,0.8, 0.8/args.lowres], ds_shape, xp=cp)
-    app = JointRecon(ksp, mps, shot_mask, kgrid, rkgrid, t0=None, max_joint_iter=args.max_iter, xp=cp)
+    kgrid, rkgrid = compute_transform_grids_voxel(full_res, voxel, ds_shape, xp=cp)
+    app = JointRecon(ksp, mps, shot_mask, kgrid, rkgrid, t0=None, max_cg_iter=args.cg_iter, max_nm_iter=args.nm_iter, max_joint_iter=args.max_iter, xp=cp)
     recon, t = app.run()
 
     #Resize image to full resoultion and move to cpu device
-    recon = sp.ifft(sp.resize(sp.fft(recon, axes=(-3,-2,-1)), full_res), axes=(-3,-2,-1))
+    if args.lowres > 1:
+        recon = sp.ifft(sp.resize(sp.fft(recon, axes=(-3,-2,-1)), full_res), axes=(-3,-2,-1))
     recon = recon.get()
     t = t.get()
 
