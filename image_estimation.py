@@ -2,8 +2,60 @@ import sigpy as sp
 import sigpy.mri
 from transform import RigidTransform, RigidTransformCudaOptimzied
 from cupyx.scipy.fft import fftn as gpu_fftn, ifftn as gpu_ifftn
+from utils import compute_transform_grids_voxel
 import cupy as cp
 from tqdm import tqdm
+import numpy as np
+import nibabel as nib
+from pathlib import Path
+import argparse
+import matplotlib.pyplot as plt
+
+def pad_to_square(img3d):
+    x, y, z = img3d.shape
+    target_size = max(x, y, z)
+
+    pad_x = (target_size - x) // 2
+    pad_y = (target_size - y) // 2
+    pad_z = (target_size - z) // 2
+
+    padded = np.pad(
+        img3d,
+        ((pad_x, target_size - x - pad_x),
+         (pad_y, target_size - y - pad_y),
+         (pad_z, target_size - z - pad_z)),
+        mode='constant'
+    )
+    return padded
+
+def show_mid_slices(img3d, save_path=None):
+    img3d = np.abs(img3d)
+    img3d = pad_to_square(img3d)
+
+    x, y, z = img3d.shape
+    mid_x, mid_y, mid_z = x // 2, y // 2, z // 2
+
+    # Extract slices
+    sagittal = np.rot90(np.rot90(np.flipud(img3d[mid_x+3, :, :])))     # Rotate 180 and flip vertically
+    coronal  = np.rot90(np.rot90(img3d[:, mid_y, :]))      # Rotate 180 degrees
+    axial    = img3d[:, :, mid_z]                          # No rotation
+
+    slices = [sagittal, coronal, axial]
+
+    # Plot without gaps
+    fig, axs = plt.subplots(1, 3, figsize=(12, 4), dpi=300)
+    for ax, slc in zip(axs, slices):
+        ax.imshow(slc.T, cmap='gray', origin='lower')
+        ax.axis('off')
+
+    # Remove white space between images
+    plt.subplots_adjust(left=0, right=1, top=1, bottom=0, wspace=0, hspace=0)
+    if save_path:
+        plt.savefig(save_path, dpi=300)
+        print(f"Saved recon image midsections to {save_path}")
+    else:
+        plt.show()
+
 
 class ImageEstimation(sp.app.App):
     def __init__(        
@@ -80,6 +132,8 @@ def estimate_image_cg(
     transforms,
     kgrid,
     rkgrid,
+    P,
+    M,
     x0=None,
     max_iter=10,
     tol=1e-6,
@@ -127,7 +181,7 @@ def estimate_image_cg(
     p = xp.empty_like(x)
     Ap = xp.empty_like(x)
 
-    Tops = [RigidTransformCudaOptimzied(p, kgrid, rkgrid) for p in transforms]
+    Tops = [RigidTransformCudaOptimzied(tr, kgrid, rkgrid) for tr in transforms]
 
     temp_buf = xp.empty_like(ksp)
     axes3 = tuple(range(-3, 0))
@@ -143,7 +197,8 @@ def estimate_image_cg(
                     overwrite_x=True, norm='ortho'
                 )
         b += Tops[i].adjoint(xp.sum(xp.conj(mps) * temp_buf, axis=0))
-    
+        b *= M
+
     # Define linear operator A(x) using out=Ap
     def A_func(x_img, out):
         out.fill(0)
@@ -156,14 +211,14 @@ def estimate_image_cg(
             # 3) FFT + shot mask
             Ex = gpu_fftn(
                 Ex,
-                axes=tuple(range(-len(img_shape), 0)),
+                axes=(-3,-2,-1),
                 overwrite_x=True, norm='ortho'
             )
             Ex *= shot_mask[i]
             # 4) Inverse FFT
             Ex = gpu_ifftn(
                 Ex,
-                axes=tuple(range(-len(img_shape), 0)),
+                axes=(-3,-2,-1),
                 overwrite_x=True, norm='ortho'
             )
             # 5) Adjoint: sum conj(mps) * img_pred
@@ -174,8 +229,9 @@ def estimate_image_cg(
     # No preconditioning in this at the moment
     A_func(x, out=Ap)
     r[:] = b - Ap
-    p[:] = r
-    rsold = xp.real(xp.vdot(r, r))
+    z = P * r
+    p = z.copy()
+    rsold = xp.real(xp.vdot(r, z))
     resid = rsold.item() ** 0.5 
     temp = xp.empty_like(x)
     for it in range(max_iter):
@@ -188,18 +244,81 @@ def estimate_image_cg(
         xp.add(x, temp, out=x)
         
         # r = r - alpha * Ap
-        xp.multiply(Ap, alpha, out=temp) # temp = alpha * Ap
-        xp.subtract(r, temp, out=r)
-
-        rsnew = xp.real(xp.vdot(r, r))
+        xp.multiply(Ap, -alpha, out=temp) # temp = alpha * Ap
+        xp.add(r, temp, out=r)
+        z = P * r
+        rsnew = xp.real(xp.vdot(r, z))
         if xp.sqrt(xp.abs(rsnew)) < tol:
             break
 
         #p = r + (rsnew / rsold) * p
         beta = rsnew / rsold
         xp.multiply(p, beta, out=temp) # temp = beta * p
-        xp.add(r, temp, out=p) 
+        xp.add(z, temp, out=p) 
         rsold = rsnew
         resid = rsold.item() ** 0.5
-
+        x *= M
     return x
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description="Coil compression for k-space and maps.")
+    parser.add_argument('--ksp', type=str, required=True, help='Path to k-space .npy file')
+    parser.add_argument('--mps', type=str, required=True, help='Path to sensitivty maps .npy file')
+    parser.add_argument('--t0',  type=str, required=True, help='Initial transform parameters .npy file')
+    parser.add_argument('--outdir', type=str, required=True, help='Output directory')
+    #parser.add_argument('--shots', type=int, required=True, help='Number of motion states/shots to recon for')
+    #parser.add_argument('--lowres', type=float, default=1.0, help='Downsample factor')
+    parser.add_argument('--max_iter', type=int, default=10, help='Max iterations for joint recon')
+    args = parser.parse_args()
+
+    outdir = Path(args.outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    ksp = np.load(args.ksp)
+    mps = np.load(args.mps)
+    t0 = np.load(args.t0)
+
+    full_res = ksp.shape[1:]
+    ncoils = ksp.shape[0]
+    num_shots = t0.shape[0]
+    shot_size = ksp.shape[2] // num_shots
+
+    #Create sequential shot mask based on indexing axis 1
+    #This can be modified later on as a todo
+    #Also we can change this so as to input your own mask as a npy array
+    rss_ksp = np.sum(np.abs(ksp)**2, axis=0, dtype=bool)
+    shot_mask = np.zeros([num_shots, *ksp.shape[1:]], dtype=bool)
+    for s in range(num_shots):
+        shot_mask[s, :, s*shot_size:(s+1)*shot_size] = rss_ksp[:, s*shot_size:(s+1)*shot_size, :]
+
+    #Unshift in preperations for estimation
+    ksp = np.fft.fftshift(ksp)
+    mps = np.fft.fftshift(mps)
+    shot_mask = np.fft.fftshift(shot_mask)
+
+
+    ksp = cp.asarray(ksp)
+    mps = cp.asarray(mps)
+    shot_mask = cp.asarray(shot_mask)
+    t0 = cp.asarray(t0)
+
+    #RECON
+    kgrid, rkgrid = compute_transform_grids_voxel(full_res, [0.8, 0.8, 0.8], xp=cp)
+    final = estimate_image_cg(ksp, mps, shot_mask, t0, kgrid, rkgrid, max_iter=args.max_iter, tol=1e-12)
+
+    final = cp.fft.fftshift(final)
+    final = cp.asnumpy(final)
+
+    #Plot summaries and save images
+    #plot_joint_recon_summary(app.objective_history, app.transform_history, save_path=outdir / 'summary')
+    show_mid_slices(pad_to_square(final), outdir / "final.png")
+    np.save(outdir / "final.npy", final)
+    affine = np.eye(4, dtype=np.float32)
+    nifti_final = nib.Nifti1Image(final, affine)
+    nib.save(nifti_final, outdir / 'final.nii.gz')
+
+
+    #np.save(outdir / "recon_lowres.npy", img_lowres)
+    #np.save(outdir / f"recon_{int(args.lowres)}_ds_{num_shots}_shots", recon)
+    #np.save(outdir / f"transforms_{int(args.lowres)}_ds_{num_shots}_shots", t)  # shape: (shots, iters, 6)
+    #np.save(outdir / "objective_loss.npy", loss_history)
