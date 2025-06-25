@@ -158,7 +158,7 @@ if __name__ == '__main__':
 
     #RECON
     kgrid, rkgrid = compute_transform_grids_voxel(full_res, voxel, ds_shape, xp=cp)
-    app = JointRecon(ksp, mps, shot_mask, kgrid, rkgrid, t0=None, max_cg_iter=args.cg_iter, max_nm_iter=args.nm_iter, max_joint_iter=args.max_iter, xp=cp)
+    app = JointRecon(ksp, mps, shot_mask, kgrid, rkgrid, t0=t0, max_cg_iter=args.cg_iter, max_nm_iter=args.nm_iter, max_joint_iter=args.max_iter, xp=cp)
     recon, t = app.run()
 
     #Resize image to full resoultion and move to cpu device
