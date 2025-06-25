@@ -55,8 +55,8 @@ class JointRecon:
         self.convergence_flags = xp.zeros((self.num_shots), dtype=bool)
         #self.P = 1 / (cp.sum(cp.abs(self.mps) ** 2, axis=0) + 1e-6)
         self.P = cp.ones(self.img_shape)
-        #self.M = (cp.sum(cp.abs(self.mps) ** 2, axis=0) > 0.1)
-        self.M = cp.ones(self.img_shape)
+        self.M = (cp.sum(cp.abs(self.mps) ** 2, axis=0) > 0.1)
+        #self.M = cp.ones(self.img_shape)
 
     def run(self):
         self.transform_history = []

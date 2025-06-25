@@ -302,9 +302,14 @@ if __name__ == '__main__':
     shot_mask = cp.asarray(shot_mask)
     t0 = cp.asarray(t0)
 
+    P = cp.ones(full_res)
+    #M = cp.ones(full_res)
+    #P = 1 / (cp.sum(cp.abs(mps) ** 2, axis=0) + 1e-6)
+    M = (cp.sum(cp.abs(mps) ** 2, axis=0) > 0.1)
+
     #RECON
     kgrid, rkgrid = compute_transform_grids_voxel(full_res, [0.8, 0.8, 0.8], xp=cp)
-    final = estimate_image_cg(ksp, mps, shot_mask, t0, kgrid, rkgrid, max_iter=args.max_iter, tol=1e-12)
+    final = estimate_image_cg(ksp, mps, shot_mask, t0, kgrid, rkgrid,P,M, max_iter=args.max_iter, tol=1e-12)
 
     final = cp.fft.fftshift(final)
     final = cp.asnumpy(final)
