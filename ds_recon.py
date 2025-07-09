@@ -34,7 +34,7 @@ def show_mid_slices(img3d, save_path=None):
     mid_x, mid_y, mid_z = x // 2, y // 2, z // 2
 
     # Extract slices
-    sagittal = np.rot90(np.rot90(np.flipud(img3d[mid_x, :, :])))     # Rotate 180 and flip vertically
+    sagittal = np.rot90(np.rot90(np.flipud(img3d[mid_x+3, :, :])))     # Rotate 180 and flip vertically
     coronal  = np.rot90(np.rot90(img3d[:, mid_y, :]))      # Rotate 180 degrees
     axial    = img3d[:, :, mid_z]                          # No rotation
 
@@ -111,6 +111,19 @@ def plot_joint_recon_summary(loss_list, t_list, shot_idx=0, save_path=None):
     else:
         plt.show()
 
+def crop_roi(ksp, mps):
+    ksp = np.fft.ifftshift(ksp, axes=(-1,-3))
+    ksp = np.fft.ifftn(ksp, axes=(-1,-3), norm='ortho')
+    ksp = np.fft.fftshift(ksp, axes=(-1,-3))
+    ksp = ksp[:, 25:-25, :, 50:250]
+
+    ksp = np.fft.ifftshift(ksp, axes=(-1,-3))
+    ksp = np.fft.fftn(ksp, axes=(-1,-3), norm='ortho')
+    ksp = np.fft.fftshift(ksp, axes=(-1,-3))
+
+    mps = mps[:, 25:-25, :, 50:250]
+    return ksp, mps
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Coil compression for k-space and maps.")
     parser.add_argument('--ksp', type=str, required=True, help='Path to k-space .npy file')
@@ -130,6 +143,8 @@ if __name__ == '__main__':
     ksp = np.load(args.ksp)
     mps = np.load(args.mps)
     t0 = np.load(args.t0) if args.t0 else None
+    
+    ksp, mps = crop_roi(ksp, mps)
 
     full_res = ksp.shape[1:]
     ncoils = ksp.shape[0]
@@ -139,8 +154,8 @@ if __name__ == '__main__':
     #Create sequential shot mask based on indexing axis 1
     #This can be modified later on as a todo
     #Also we can change this so as to input your own mask as a npy array
-    rss_ksp = np.sum(np.abs(ksp)**2, axis=0, dtype=np.bool)
-    shot_mask = np.zeros([num_shots, *ksp.shape[1:]], dtype=np.bool)
+    rss_ksp = np.sum(np.abs(ksp)**2, axis=0, dtype=bool)
+    shot_mask = np.zeros([num_shots, *ksp.shape[1:]], dtype=bool)
     for s in range(num_shots):
         shot_mask[s, :, s*shot_size:(s+1)*shot_size] = rss_ksp[:, s*shot_size:(s+1)*shot_size, :]
     voxel = [0.8,0.8,0.8]
@@ -168,9 +183,12 @@ if __name__ == '__main__':
     t = t.get()
 
     #Plot summaries and save images
-    plot_joint_recon_summary(app.objective_history, app.transform_history, save_path=outdir / 'summary')
-    show_mid_slices(pad_to_square(recon), outdir / f"recon_downsample_factor_{int(args.lowres)}.png")
-    #np.save(outdir / "recon_lowres.npy", img_lowres)
-    np.save(outdir / f"recon_{int(args.lowres)}_ds_{num_shots}_shots", recon)
-    np.save(outdir / f"transforms_{int(args.lowres)}_ds_{num_shots}_shots", t)  # shape: (shots, iters, 6)
-    #np.save(outdir / "objective_loss.npy", loss_history)
+    img_file = f"recon_sh{num_shots}_ds{int(args.lowres)}.npy"
+    viz_file = f"recon_sh{num_shots}_ds{int(args.lowres)}.png"
+    tform_file = f"transforms_sh{num_shots}_ds{int(args.lowres)}.npy"
+    summary_file = f"summary_sh{num_shots}_ds{int(args.lowres)}.png"
+
+    plot_joint_recon_summary(app.objective_history, app.transform_history, num_shots//2, save_path=outdir / summary_file)
+    show_mid_slices(pad_to_square(recon), outdir / viz_file)
+    np.save(outdir / img_file, recon)
+    np.save(outdir / tform_file, t)  # shape: (shots, iters, 6)
