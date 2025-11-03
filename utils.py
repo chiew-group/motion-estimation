@@ -1,5 +1,6 @@
 import sigpy as sp
 import numpy as np
+import matplotlib.pyplot as plt
 
 def generate_motion_parameters(num_states, low_freq_var=0.1, high_freq_var=5.0, spike_prob=0.02, seed=123456789):
     """
@@ -134,3 +135,48 @@ def compute_transform_grids_voxel(shape, voxel_size, downsample_res=None, xp=np)
     }
 
     return kgrid, rkgrid
+
+def _pad_to_square(img3d):
+    x, y, z = img3d.shape
+    target_size = max(x, y, z)
+
+    pad_x = (target_size - x) // 2
+    pad_y = (target_size - y) // 2
+    pad_z = (target_size - z) // 2
+
+    padded = np.pad(
+        img3d,
+        ((pad_x, target_size - x - pad_x),
+         (pad_y, target_size - y - pad_y),
+         (pad_z, target_size - z - pad_z)),
+        mode='constant'
+    )
+    return padded
+
+def show_mid_slices(img3d, save_path=None):
+    img3d = np.abs(img3d)
+    img3d = _pad_to_square(img3d)
+
+    x, y, z = img3d.shape
+    mid_x, mid_y, mid_z = x // 2, y // 2, z // 2
+
+    # Extract slices
+    sagittal = np.rot90(np.rot90(np.flipud(img3d[mid_x+3, :, :])))     # Rotate 180 and flip vertically
+    coronal  = np.rot90(np.rot90(img3d[:, mid_y, :]))      # Rotate 180 degrees
+    axial    = img3d[:, :, mid_z]                          # No rotation
+
+    slices = [sagittal, coronal, axial]
+
+    # Plot without gaps
+    fig, axs = plt.subplots(1, 3, figsize=(12, 4), dpi=300)
+    for ax, slc in zip(axs, slices):
+        ax.imshow(slc.T, cmap='gray', origin='lower')
+        ax.axis('off')
+
+    # Remove white space between images
+    plt.subplots_adjust(left=0, right=1, top=1, bottom=0, wspace=0, hspace=0)
+    if save_path:
+        plt.savefig(save_path, dpi=300)
+        print(f"Saved image montage to {save_path}")
+    else:
+        plt.show()
