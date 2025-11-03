@@ -34,7 +34,7 @@ class JointRecon:
 
         #Data needs to be uncentered and then moved onto the device
         self.ksp = cp.fft.ifftshift(cp.array(ksp),axes=(-3,-2,-1)).astype(cp.complex64)
-        self.mps = cp.fft.ifftshift(cp.array(mps), axes=(-3,-2,-1))
+        self.mps = cp.fft.ifftshift(cp.array(mps), axes=(-3,-2,-1)).astype(cp.complex64)
         self.shot_mask = cp.fft.ifftshift(cp.array(shot_mask), axes=(-3,-2,-1))
 
         self.max_norm = cp.max(cp.abs(cp.fft.ifftn(self.ksp, axes=(-3,-2,-1), norm='ortho')))
@@ -53,8 +53,8 @@ class JointRecon:
 
         self.damp = xp.ones((self.num_shots))
         self.convergence_flags = xp.zeros((self.num_shots), dtype=bool)
-        #self.P = 1 / (cp.sum(cp.abs(self.mps) ** 2, axis=0) + 1e-6)
-        self.P = cp.ones(self.img_shape)
+        self.P = 1 / (cp.sum(cp.abs(self.mps) ** 2, axis=0) + 1e-3)
+        #self.P = cp.ones(self.img_shape)
         self.M = (cp.sum(cp.abs(self.mps) ** 2, axis=0) > 0.1)
         #self.M = cp.ones(self.img_shape)
 
