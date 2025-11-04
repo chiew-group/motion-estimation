@@ -135,7 +135,7 @@ def estimate_image_cg(
     P,
     M,
     x0=None,
-    max_iter=10,
+    max_iter=100,
     tol=1e-6,
 ):
     """
