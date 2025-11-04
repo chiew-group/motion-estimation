@@ -32,10 +32,10 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     preprocess_path = Path(args.out) / "pre"
-    preprocess_path.mkdir(exist_ok=True)
+    preprocess_path.mkdir(exist_ok=True, parents=True)
     
     recon_path = Path(args.out) / "recon"
-    recon_path.mkdir(exist_ok=True)
+    recon_path.mkdir(exist_ok=True, parents=True)
 
     # Load and extract from .dat
     mapped = twixtools.map_twix(twixtools.read_twix(args.dat))
