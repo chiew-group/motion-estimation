@@ -28,6 +28,7 @@ if __name__ == '__main__':
     parser.add_argument("--dat", required=True)
     parser.add_argument("--out", required=True)
     parser.add_argument("--nshots", type=int, required=True)
+    parser.add_argument("--sampling", type=str, default='disorder')
     parser.add_argument("--iters", type=int, default=1000)
     args = parser.parse_args()
 
@@ -96,9 +97,9 @@ if __name__ == '__main__':
     imsize = ksp.shape[1:]
     #TODO right now the esprit takes kspace in a odd shape so tranposes are required
     mps = rx_espirit_3d(ref.transpose(1,2,3,0), imsize,
-                        kernel_size=(6,6,6),
+                        kernel_size=(5,5,5),
                         eig_thresh=0.02,
-                        mask_thresh=0.95)
+                        mask_thresh=0.99)
     mps = mps.transpose((3,0,1,2))
     mps = sp.to_device(mps)
     np.save(preprocess_path / "mps.npy", mps)
@@ -123,7 +124,7 @@ if __name__ == '__main__':
         motion_mask[s, partitions[start:end], lines[start:end]] = True
     motion_mask = motion_mask[..., None]
 
-    recon, t_est = pyramid_reconstruction(ksp, mps, motion_mask, n_shots, n_joint_iters=args.iters, save_path=recon_path)
+    recon, t_est = pyramid_reconstruction(ksp, mps, motion_mask, n_shots, n_joint_iters=args.iters, save_path=recon_path, sampling=args.sampling)
 
     np.save(recon_path / "joint_recon.npy", recon)
     np.save(recon_path / "estimated_transforms", t_est)

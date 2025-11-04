@@ -8,6 +8,7 @@ import sigpy.plot as pl
 import matplotlib.pyplot as plt
 
 def _plot_convergence(loss, title="", save=None):
+    plt.figure(figsize=(8,8))
     plt.plot(np.log10(loss), marker='o', color='black')
     plt.ylabel('Log10 Loss')
     plt.xlabel('Iterations')
@@ -20,7 +21,7 @@ def _plot_convergence(loss, title="", save=None):
         plt.show()
 
 
-def pyramid_reconstruction(ksp, mps, A, nshots, n_spatial_levels=3, n_temporal_levels=3, n_joint_iters=100, save_path=None):
+def pyramid_reconstruction(ksp, mps, A, nshots, n_spatial_levels=3, n_temporal_levels=3, n_joint_iters=100, save_path=None, sampling='disorder'):
 
     #Initialize
     img_full_res = ksp.shape[1:]
@@ -31,7 +32,11 @@ def pyramid_reconstruction(ksp, mps, A, nshots, n_spatial_levels=3, n_temporal_l
     #Multi-resolution loop
     for sl in range(n_spatial_levels-1):
         down_factor = 2 ** (n_spatial_levels - sl - 1)
-        ds_img_shape = (int(img_full_res[0] // down_factor), int(img_full_res[1]//down_factor), img_full_res[2])
+        if sampling == 'disorder':
+            ds_img_shape = (int(img_full_res[0] // down_factor), int(img_full_res[1]//down_factor), img_full_res[2])
+        elif sampling == 'sequential':
+            #When using a seq sampling scheme we have to crop only across the axis that contains all motion states info
+            ds_img_shape = (int(img_full_res[0] // down_factor), img_full_res[1], img_full_res[2])
         print(f"Spatial Level {sl+1}/{n_spatial_levels} Downsampling by a factor of {down_factor}")
         #Downsample image, maps, ksp, sampling mask and transform grids
 
