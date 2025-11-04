@@ -27,8 +27,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Joint reconstruction for motion correction")
     parser.add_argument("--dat", required=True)
     parser.add_argument("--out", required=True)
-    parser.add_argument("--nshots", required=True)
-    parser.add_argument("--iters", default=1000)
+    parser.add_argument("--nshots", type=int, required=True)
+    parser.add_argument("--iters", type=int, default=1000)
     args = parser.parse_args()
 
     preprocess_path = Path(args.out) / "pre"
