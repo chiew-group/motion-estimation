@@ -267,13 +267,13 @@ def main():
     A = A[..., None]
     corruption_A = corruption_A[..., None]
 
-    pl.ImagePlot(A)
-    pl.ImagePlot(corruption_A)
-    pl.ImagePlot(np.sum(corruption_A, axis=0))
+    #pl.ImagePlot(A)
+    #pl.ImagePlot(corruption_A)
+    #pl.ImagePlot(np.sum(corruption_A, axis=0))
 
     corruption_transforms = generate_motion_parameters_new(gt.shape[0], low_freq_var=1, high_freq_var=20.0)
 
-    plot_transforms(corruption_transforms)
+    #plot_transforms(corruption_transforms)
 
     gt  = cp.array(gt)
     mps = cp.array(mps)
@@ -326,8 +326,8 @@ def main():
     
     #The corrected recon and transform estimates will have be sent back to the cpu already
 
-    pl.ImagePlot(corrected)
-    pl.ImagePlot(uncorrected)
+    #pl.ImagePlot(corrected)
+    #pl.ImagePlot(uncorrected)
     
     err_volume = np.real(np.abs(corrected - gt))
     err_img = np.linalg.norm(err_volume)
