@@ -123,9 +123,10 @@ if __name__ == '__main__':
         motion_mask[s, partitions[start:end], lines[start:end]] = True
     motion_mask = motion_mask[..., None]
 
-    recon = pyramid_reconstruction(ksp, mps, motion_mask, n_shots, n_joint_iters=args.iters, save_path=recon_path)
+    recon, t_est = pyramid_reconstruction(ksp, mps, motion_mask, n_shots, n_joint_iters=args.iters, save_path=recon_path)
 
     np.save(recon_path / "joint_recon.npy", recon)
+    np.save(recon_path / "estimated_transforms", t_est)
     show_mid_slices(recon, save_path=recon_path / "image_slices.png")
     nib.save(nib.Nifti1Image(recon, np.eye(4)), recon_path / "joint_recon.nii.gz")
 
