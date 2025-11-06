@@ -223,7 +223,7 @@ def estimate_image_cg(
             )
             # 5) Adjoint: sum conj(mps) * img_pred
             xp.add(out, T.adjoint(xp.sum(xp.conj(mps) * Ex, axis=0)), out=out) # Apply adjoint of rigid transform
-
+        out *= M
     # --- Conjugate Gradient ---
     # Initial residual r = b - A(x)
     # No preconditioning in this at the moment
@@ -242,7 +242,7 @@ def estimate_image_cg(
         # x = x + alpha * p
         xp.multiply(p, alpha, out=temp)
         xp.add(x, temp, out=x)
-        
+
         # r = r - alpha * Ap
         xp.multiply(Ap, -alpha, out=temp) # temp = alpha * Ap
         xp.add(r, temp, out=r)
@@ -257,7 +257,7 @@ def estimate_image_cg(
         xp.add(z, temp, out=p) 
         rsold = rsnew
         resid = rsold.item() ** 0.5
-        x *= M
+
     return x
 
 if __name__ == '__main__':
