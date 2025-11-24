@@ -234,7 +234,8 @@ def estimate_image_cg(
     rsold = xp.real(xp.vdot(r, z))
     resid = rsold.item() ** 0.5 
     temp = xp.empty_like(x)
-    for it in range(max_iter):
+    pbar = tqdm(range(max_iter), desc="CG-Sense")
+    for it in pbar:
         A_func(p, out=Ap)
         pAp = xp.real(xp.vdot(p, Ap)).item()
         alpha = rsold / pAp
@@ -248,6 +249,7 @@ def estimate_image_cg(
         xp.add(r, temp, out=r)
         z = P * r
         rsnew = xp.real(xp.vdot(r, z))
+        pbar.set_postfix(res=f"{resid:.3e}")
         if xp.sqrt(xp.abs(rsnew)) < tol:
             break
 
