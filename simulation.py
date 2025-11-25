@@ -334,8 +334,8 @@ def main():
     #err_t = np.linalg.norm(corruption_transforms-t_estimates)
 
     #We save the corrected and uncorrected as compressed nifti files to aquires QA scores
-    nib.save(nib.Nifti1Image(np.abs(corrected), np.eye(4)), out / "corrected.nii.gz")
-    nib.save(nib.Nifti1Image(np.abs(uncorrected), np.eye(4)), out / "uncorrected.nii.gz")
+    nib.save(nib.Nifti1Image(np.abs(corrected).astype(np.float64), np.eye(4)), out / "corrected.nii.gz")
+    nib.save(nib.Nifti1Image(np.abs(uncorrected).astype(np.float64), np.eye(4)), out / "uncorrected.nii.gz")
 
     #Save the midslices as a sneak peek png file
     show_mid_slices(uncorrected, save_path=out/ "uncorrected_slices.png")
