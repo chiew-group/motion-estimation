@@ -137,6 +137,7 @@ def estimate_image_cg(
     x0=None,
     max_iter=100,
     tol=1e-6,
+    show_pbar=True
 ):
     """
     Estimate the image x by solving A x = b with Conjugate Gradient,
@@ -234,7 +235,7 @@ def estimate_image_cg(
     rsold = xp.real(xp.vdot(r, z))
     resid = rsold.item() ** 0.5 
     temp = xp.empty_like(x)
-    pbar = tqdm(range(max_iter), desc="CG-Sense")
+    pbar = tqdm(range(max_iter), desc="CG-Sense", disable=not show_pbar)
     for it in pbar:
         A_func(p, out=Ap)
         pAp = xp.real(xp.vdot(p, Ap)).item()

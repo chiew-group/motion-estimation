@@ -64,7 +64,7 @@ class JointRecon:
 
         for iter in tqdm(range(self.max_joint_iter)):
             self.x = estimate_image_cg(self.ksp, self.mps, self.shot_mask, self.t, self.kgrid, self.rkgrid, self.P, self.M,
-                                    x0=self.x, max_iter=self.max_cg_iter)
+                                    x0=self.x, max_iter=self.max_cg_iter, show_pbar=False)
             for _ in range(self.max_nm_iter):
                 self.x = estimate_transform(self.ksp, self.mps, self.shot_mask, self.x, self.kgrid, self.rkgrid,
                                             self.damp, self.convergence_flags,
