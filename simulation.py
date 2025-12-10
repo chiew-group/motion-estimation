@@ -5,6 +5,7 @@ from math import prod
 import numpy as np
 import cupy as cp
 import sigpy as sp
+import sigpy.mri
 import matplotlib.pyplot as plt
 import nibabel as nib
 import sigpy.plot as pl
@@ -195,6 +196,8 @@ def main():
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--iters", type=int, default=200)
     ap.add_argument("--no", type=int, default=0)
+    ap.add_argument("--mask", type=str, default=None)
+    ap.add_argument("--transforms", type=str, default=None)
     args = ap.parse_args()
 
     out = Path(args.out_dir)
@@ -211,67 +214,81 @@ def main():
 
     nshots = prod(tile_size) // args.accel
     nshots_corruption = gt.shape[0] // args.accel
+    nshots_corruption = nshots
     print(f"Number of corruptions shots: {nshots_corruption}")
     print(f"Number of shots: {nshots} with tiles of size {tile_size} and acceleration factor {args.accel}")
     K = gt.shape[:2]
 
-    if args.ord == 'disorder':
+    #If we want to use our own mask choose it here
+    if args.mask is not None:
+        A = np.load(args.mask)
+        A = A[..., None]
+        corruption_A = A
+    else:
+        if args.ord == 'disorder':
 
-        #Sample coordinates using DISORDER then take up to the acceleration amount
-        #R=2 means first half and R=4 means first quarter
-        shot_ids, temporal, y, x = sample_disorder(K, tile_size, R=1, seed=args.seed)        
-        y = y[:len(y)//args.accel]
-        x = x[:len(x)//args.accel]
+            #Sample coordinates using DISORDER then take up to the acceleration amount
+            #R=2 means first half and R=4 means first quarter
+            shot_ids, temporal, y, x = sample_disorder(K, tile_size, R=1, seed=args.seed)        
+            y = y[:len(y)//args.accel]
+            x = x[:len(x)//args.accel]
 
-        #Create the reconstruction mask by binning a certain amount of samples per motion state
-        A = np.zeros((nshots, *K), dtype=bool)
-        samples_per_shot = y.shape[0] // nshots
-        for s in range(nshots):
-            start = s*samples_per_shot
-            end   = (s+1)*samples_per_shot
-            A[s, y[start:end], x[start:end]] = True
-        
-        #Likewise we create the corruption mask but it will be done at a higher number of states
-        corruption_A = np.zeros((nshots_corruption, *A.shape[1:]), dtype=bool)
-        samples_per_shot = len(y) // nshots_corruption
-        for s in range(nshots_corruption):
-            start = s*samples_per_shot
-            end   = (s+1)*samples_per_shot
-            corruption_A[s, y[start:end], x[start:end]] = True
+            #Create the reconstruction mask by binning a certain amount of samples per motion state
+            A = np.zeros((nshots, *K), dtype=bool)
+            samples_per_shot = y.shape[0] // nshots
+            for s in range(nshots):
+                start = s*samples_per_shot
+                end   = (s+1)*samples_per_shot
+                A[s, y[start:end], x[start:end]] = True
+            
+            #Likewise we create the corruption mask but it will be done at a higher number of states
+            corruption_A = np.zeros((nshots_corruption, *A.shape[1:]), dtype=bool)
+            samples_per_shot = len(y) // nshots_corruption
+            for s in range(nshots_corruption):
+                start = s*samples_per_shot
+                end   = (s+1)*samples_per_shot
+                corruption_A[s, y[start:end], x[start:end]] = True
 
-    elif args.ord == 'sequential':
+        elif args.ord == 'sequential':
 
-        #For the sequential we create the coordinates and for acceleration factors we skip lines
-        y = np.repeat(np.arange(0,K[0],args.accel), K[1])
-        x = np.tile(np.arange(K[1]), K[0]//args.accel)
+            #For the sequential we create the coordinates and for acceleration factors we skip lines
+            y = np.repeat(np.arange(0,K[0],args.accel), K[1])
+            x = np.tile(np.arange(K[1]), K[0]//args.accel)
 
-        #Create the reconstruction mask like in the disorder case
-        A = np.zeros((nshots, *K), dtype=bool)
-        samples_per_shot = y.shape[0] // nshots
-        for s in range(nshots):
-            start = s*samples_per_shot
-            end   = (s+1)*samples_per_shot
-            A[s, y[start:end], x[start:end]] = True
+            #Create the reconstruction mask like in the disorder case
+            A = np.zeros((nshots, *K), dtype=bool)
+            samples_per_shot = y.shape[0] // nshots
+            for s in range(nshots):
+                start = s*samples_per_shot
+                end   = (s+1)*samples_per_shot
+                A[s, y[start:end], x[start:end]] = True
 
 
-        #Create the corruption mask
-        corruption_A = np.zeros((nshots_corruption, *A.shape[1:]), dtype=bool)
-        samples_per_shot = len(y) // nshots_corruption
-        for s in range(nshots_corruption):
-            start = s*samples_per_shot
-            end   = (s+1)*samples_per_shot
-            corruption_A[s, y[start:end], x[start:end]] = True
+            #Create the corruption mask
+            corruption_A = np.zeros((nshots_corruption, *A.shape[1:]), dtype=bool)
+            samples_per_shot = len(y) // nshots_corruption
+            for s in range(nshots_corruption):
+                start = s*samples_per_shot
+                end   = (s+1)*samples_per_shot
+                corruption_A[s, y[start:end], x[start:end]] = True
 
-    #We have to add this extra dimension at the end so broadcasting can work in the recon algorithm
-    #Not having data in the third dimension saves us some space and lets numpy do the work
-    A = A[..., None]
-    corruption_A = corruption_A[..., None]
+        #We have to add this extra dimension at the end so broadcasting can work in the recon algorithm
+        #Not having data in the third dimension saves us some space and lets numpy do the work
+        A = A[..., None]
+        corruption_A = corruption_A[..., None]
 
     #pl.ImagePlot(A)
     #pl.ImagePlot(corruption_A)
     #pl.ImagePlot(np.sum(corruption_A, axis=0))
 
-    corruption_transforms = generate_motion_parameters_new(gt.shape[0], low_freq_var=1, high_freq_var=20.0)
+    corruption_transforms = generate_motion_parameters_new(nshots_corruption, low_freq_var=1, high_freq_var=20.0)
+    #fix, axes = plt.subplots(2,1, dpi=300)
+    #axes[0].plot(corruption_transforms[:, :3])
+    #axes[0].set_title('Translations')
+    #axes[1].plot(corruption_transforms[:,3:] * 180/np.pi)
+    #axes[1].set_title('Rotations')
+    #plt.show()
+    #corruption_transforms = np.load(r"c:\Users\giuse\OneDrive\Documents\Nov19_2025_experiment\sub1_nomotion\estimated_transforms.npy")
 
     #plot_transforms(corruption_transforms)
 
@@ -283,7 +300,7 @@ def main():
     #Only from there we can chop it up to the amount of acceleration we want this way the same curve is used
     #each time
     corruption_transforms = cp.array(corruption_transforms[:nshots_corruption])
-
+    #corruption_transforms = cp.zeros((nshots_corruption, 6))
     #Create the motion corrupted kspace using the corruption mask
     #Add some complex gaussian noise if required
     ksp = generate_corrupted_kspace(gt, mps, corruption_A, corruption_transforms)
@@ -301,23 +318,26 @@ def main():
 
     ksp = cp.array(ksp)
     #We must uncenter the inputs to use image estimation since that is required form of input
-    ksp = cp.fft.ifftshift(ksp, axes=(-3,-2,-1))
-    mps = cp.fft.ifftshift(mps, axes=(-3,-2,-1))
-    A   = cp.fft.ifftshift(A,   axes=(-3,-2,-1))
+    #ksp = cp.fft.ifftshift(ksp, axes=(-3,-2,-1))
+    #mps = cp.fft.ifftshift(mps, axes=(-3,-2,-1))
+    #A   = cp.fft.ifftshift(A,   axes=(-3,-2,-1))
 
-    kgrid, rkgrid = compute_transform_grids_voxel(gt.shape, [1,1,1], xp=cp)
+    #kgrid, rkgrid = compute_transform_grids_voxel(gt.shape, [1,1,1], xp=cp)
 
-    P = 1 / (cp.sum(cp.abs(mps) ** 2, axis=0) + 1e-6)
+    p = 1 / (cp.sum(cp.abs(mps) ** 2, axis=0) + 1e-6)
     M = (cp.sum(cp.abs(mps) ** 2, axis=0) > 0.1)
-    uncorrected = estimate_image_cg(ksp, mps, A, cp.zeros((nshots, 6)), kgrid, rkgrid, P, M)
-    uncorrected = cp.fft.fftshift(uncorrected)
+    P = sp.linop.Multiply(ksp.shape[1:], p)
+    uncorrected = sp.mri.app.SenseRecon(ksp, mps, P=P, device=sp.Device(0), tol=1e-12).run()
+    #uncorrected = estimate_image_cg(ksp, mps, A, cp.zeros((nshots, 6)), kgrid, rkgrid, P, M)
+    #uncorrected = cp.fft.fftshift(uncorrected)
     uncorrected = cp.asnumpy(uncorrected)
     gt = cp.asnumpy(gt)
-
+    #np.save(r"C:\Users\giuse\OneDrive\Documents\Nov19_2025_experiment\Subj1\corruption_test.npy", uncorrected)
+    pl.ImagePlot(uncorrected)
     #We center the inputs again becuase the full pyramid recon handles the shifting for us
-    ksp = cp.fft.fftshift(ksp, axes=(-3,-2,-1))
-    mps = cp.fft.fftshift(mps, axes=(-3,-2,-1))
-    A   = cp.fft.fftshift(A,   axes=(-3,-2,-1))
+    #ksp = cp.fft.fftshift(ksp, axes=(-3,-2,-1))
+    #mps = cp.fft.fftshift(mps, axes=(-3,-2,-1))
+    #A   = cp.fft.fftshift(A,   axes=(-3,-2,-1))
 
 
     corrected, t_estimates = pyramid_reconstruction(ksp, mps, A, nshots, 
