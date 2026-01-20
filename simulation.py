@@ -16,6 +16,11 @@ from transform import RigidTransformCudaOptimzied
 from utils import compute_transform_grids_voxel, show_mid_slices
 from pyramid import pyramid_reconstruction
 
+from dataclasses import dataclass
+from math import ceil
+import random
+from typing import List, Tuple
+
 def sample_disorder(K, U, R=1, seed=42):
     ky = np.arange(K[0])
     kx = np.arange(K[1])
@@ -183,7 +188,64 @@ def plot_transforms(transforms):
     axs[1].grid(True)
     axs[1].legend(["x-axis", "y-axis", "z-axis"])
     plt.show()
-    
+
+@dataclass
+class DisorderConfig:
+    max_line_number: int           # original (0-based) max line index
+    max_partition_number: int      # original (0-based) max partition index
+    pat_lines_to_measure: int      # lines actually measured per partition
+    block_lin: int                 # lBlockLin
+    block_par: int                 # lBlockPar
+    seed: int = 123456             # match std::mt19937(123456)
+
+def make_disorder_order(cfg: DisorderConfig) -> List[Tuple[int, int]]:
+    """
+    Returns a list of (line, partition) pairs of length NoOfReorderIndices
+    that replicates the tiling + within-tile shuffle + global interleave logic.
+    """
+    # 1) Pad to block multiples
+    L = ceil((cfg.max_line_number + 1) / cfg.block_lin) * cfg.block_lin  # total lines after padding
+    P = ceil((cfg.max_partition_number + 1) / cfg.block_par) * cfg.block_par  # total partitions after padding
+    max_line_number = L - 1
+    max_partition_number = P - 1
+
+    # 2) Count indices (like setNoOfReorderIndices(getPATLinesToMeasure() * (MaxPartition+1)))
+    no_of_reorder_indices = cfg.pat_lines_to_measure * (max_partition_number + 1)
+
+    # 3) Groups/tiles
+    max_indices_per_group = cfg.block_lin * cfg.block_par
+    num_lin_groups = L // cfg.block_lin
+    num_par_groups = P // cfg.block_par
+    num_groups = num_lin_groups * num_par_groups
+    indices_per_group = no_of_reorder_indices // num_groups  # integer division, like in the C++
+
+    # 4) Prepare the shuffled local indices for a tile
+    rng = random.Random(cfg.seed)
+    base_idx = list(range(max_indices_per_group))  # 0..(block_lin*block_par-1)
+
+    # 5) Allocate output (line, partition) per reorder index
+    out = [None] * (indices_per_group * num_groups)
+
+    # Interleave by j (the within-tile draw index), then by (linG, parG)
+    for linG in range(num_lin_groups):
+        for parG in range(num_par_groups):
+            idx = base_idx[:]              # copy
+            rng.shuffle(idx)               # shuffle anew for each group, same seed stream as mt19937
+            for j in range(indices_per_group):
+                local = idx[j]
+                local_lin = local % cfg.block_lin
+                local_par = local // cfg.block_lin
+
+                line =  local_lin + (linG % cfg.block_par)*(max_line_number+1)/cfg.block_par + (linG/cfg.block_par) * cfg.block_lin
+                part =  local_par + parG * cfg.block_par 
+
+                out_pos = j * num_groups + linG * num_par_groups + parG
+                out[out_pos] = (line, part)
+
+    return out, (L,P)
+
+
+
 
 def main():
     ap = argparse.ArgumentParser(description="DISORDER 3D synthetic motion experiment sweep")    
@@ -192,12 +254,13 @@ def main():
     ap.add_argument("--out_dir", required=True, type=str, help="Output dir for all the results")
     ap.add_argument("--ord", default='disorder', type=str)
     ap.add_argument("--tile_size", type=int, nargs='+', help="Comma list of tile shape, needs to match shot count")
-    ap.add_argument("--accel", type=int, default=1)
+    ap.add_argument("--accel", type=int, default=2)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--iters", type=int, default=200)
     ap.add_argument("--no", type=int, default=0)
     ap.add_argument("--mask", type=str, default=None)
     ap.add_argument("--transforms", type=str, default=None)
+    ap.add_argument("--continuous", action='store_true')
     args = ap.parse_args()
 
     out = Path(args.out_dir)
@@ -213,12 +276,11 @@ def main():
     assert len(tile_size) == 2
 
     nshots = prod(tile_size) // args.accel
-    nshots_corruption = gt.shape[0] // args.accel
-    nshots_corruption = nshots
+    nshots_corruption = gt.shape[0] // args.accel if args.continuous else nshots
+    #nshots_corruption = nshots
     print(f"Number of corruptions shots: {nshots_corruption}")
     print(f"Number of shots: {nshots} with tiles of size {tile_size} and acceleration factor {args.accel}")
     K = gt.shape[:2]
-
     #If we want to use our own mask choose it here
     if args.mask is not None:
         A = np.load(args.mask)
@@ -226,28 +288,38 @@ def main():
         corruption_A = A
     else:
         if args.ord == 'disorder':
+            # Example usage:
+            cfg = DisorderConfig(
+                max_line_number=gt.shape[1]-1,         # e.g. 224 lines (0..223) before padding
+                max_partition_number=gt.shape[0]-1,     # e.g. 64 partitions (0..63) before padding
+                pat_lines_to_measure=gt.shape[1]//2,    # example PAT lines
+                block_lin=4,                 # tile height
+                block_par=4,                 # tile width
+                seed=123456
+            )
+            order, (L,P) = make_disorder_order(cfg)
+            order = np.array(order, dtype=int)
 
             #Sample coordinates using DISORDER then take up to the acceleration amount
             #R=2 means first half and R=4 means first quarter
-            shot_ids, temporal, y, x = sample_disorder(K, tile_size, R=1, seed=args.seed)        
-            y = y[:len(y)//args.accel]
-            x = x[:len(x)//args.accel]
-
+            #shot_ids, temporal, y, x = sample_disorder(K, tile_size, R=1, seed=args.seed)        
+            #y = y[:len(y)//args.accel]
+            #x = x[:len(x)//args.accel]
             #Create the reconstruction mask by binning a certain amount of samples per motion state
             A = np.zeros((nshots, *K), dtype=bool)
-            samples_per_shot = y.shape[0] // nshots
+            samples_per_shot = order.shape[0] // nshots
             for s in range(nshots):
                 start = s*samples_per_shot
                 end   = (s+1)*samples_per_shot
-                A[s, y[start:end], x[start:end]] = True
+                A[s, order[start:end, 1], order[start:end, 0]] = True
             
             #Likewise we create the corruption mask but it will be done at a higher number of states
             corruption_A = np.zeros((nshots_corruption, *A.shape[1:]), dtype=bool)
-            samples_per_shot = len(y) // nshots_corruption
+            samples_per_shot = len(order) // nshots_corruption
             for s in range(nshots_corruption):
                 start = s*samples_per_shot
                 end   = (s+1)*samples_per_shot
-                corruption_A[s, y[start:end], x[start:end]] = True
+                corruption_A[s, order[start:end, 1], order[start:end, 0]] = True
 
         elif args.ord == 'sequential':
 
@@ -276,7 +348,6 @@ def main():
         #Not having data in the third dimension saves us some space and lets numpy do the work
         A = A[..., None]
         corruption_A = corruption_A[..., None]
-
     #pl.ImagePlot(A)
     #pl.ImagePlot(corruption_A)
     #pl.ImagePlot(np.sum(corruption_A, axis=0))
@@ -328,12 +399,14 @@ def main():
     M = (cp.sum(cp.abs(mps) ** 2, axis=0) > 0.1)
     P = sp.linop.Multiply(ksp.shape[1:], p)
     uncorrected = sp.mri.app.SenseRecon(ksp, mps, P=P, device=sp.Device(0), tol=1e-12).run()
-    #uncorrected = estimate_image_cg(ksp, mps, A, cp.zeros((nshots, 6)), kgrid, rkgrid, P, M)
+    #uncorrected = estimate_image_cg(ksp, mps, A, cp.zeros((nshots, 6)), kgrid, rkgrid, P, M, max_iter=10)
     #uncorrected = cp.fft.fftshift(uncorrected)
     uncorrected = cp.asnumpy(uncorrected)
     gt = cp.asnumpy(gt)
+    #pl.ImagePlot(uncorrected)
     #np.save(r"C:\Users\giuse\OneDrive\Documents\Nov19_2025_experiment\Subj1\corruption_test.npy", uncorrected)
-    pl.ImagePlot(uncorrected)
+  
+    #plt.imshow(np.max(np.abs(uncorrected-gt), axis=-1).T, cmap='magma', origin='lower', vmin=0.0, vmax=vm); plt.show();
     #We center the inputs again becuase the full pyramid recon handles the shifting for us
     #ksp = cp.fft.fftshift(ksp, axes=(-3,-2,-1))
     #mps = cp.fft.fftshift(mps, axes=(-3,-2,-1))
@@ -363,12 +436,12 @@ def main():
 
     #Save the important simulation results and errors
     np.savez(out / "results", 
-             corrected=corrected, 
-             uncorrected=uncorrected,
+             corrected=np.abs(corrected), 
+             uncorrected=np.abs(uncorrected),
              t_estimates=t_estimates,
              err_volume=err_volume, 
              err_img=err_img)
-
+    
 
 if __name__ == '__main__':
     main()
