@@ -236,7 +236,7 @@ def make_disorder_order(cfg: DisorderConfig) -> List[Tuple[int, int]]:
                 local_lin = local % cfg.block_lin
                 local_par = local // cfg.block_lin
 
-                line =  local_lin + (linG % cfg.block_par)*(max_line_number+1)/cfg.block_par + (linG/cfg.block_par) * cfg.block_lin
+                line =  local_lin + (linG % cfg.block_par)*(max_line_number+1)//cfg.block_par + (linG//cfg.block_par) * cfg.block_lin
                 part =  local_par + parG * cfg.block_par 
 
                 out_pos = j * num_groups + linG * num_par_groups + parG
@@ -275,6 +275,8 @@ def main():
     tile_size = tuple(args.tile_size)
     assert len(tile_size) == 2
 
+    assert gt.shape[0] % tile_size[0] == 0
+    assert gt.shape[1] % tile_size[1] == 0
     nshots = prod(tile_size) // args.accel
     nshots_corruption = gt.shape[0] // args.accel if args.continuous else nshots
     #nshots_corruption = nshots
@@ -292,9 +294,9 @@ def main():
             cfg = DisorderConfig(
                 max_line_number=gt.shape[1]-1,         # e.g. 224 lines (0..223) before padding
                 max_partition_number=gt.shape[0]-1,     # e.g. 64 partitions (0..63) before padding
-                pat_lines_to_measure=gt.shape[1]//2,    # example PAT lines
-                block_lin=4,                 # tile height
-                block_par=4,                 # tile width
+                pat_lines_to_measure=gt.shape[1]//args.accel,    # example PAT lines
+                block_lin=tile_size[1],                 # tile height
+                block_par=tile_size[0],                 # tile width
                 seed=123456
             )
             order, (L,P) = make_disorder_order(cfg)
@@ -403,10 +405,8 @@ def main():
     #uncorrected = cp.fft.fftshift(uncorrected)
     uncorrected = cp.asnumpy(uncorrected)
     gt = cp.asnumpy(gt)
+    #plt.imshow(np.abs(uncorrected-gt)[...,160].T, origin='lower', cmap='magma'); plt.show()
     #pl.ImagePlot(uncorrected)
-    #np.save(r"C:\Users\giuse\OneDrive\Documents\Nov19_2025_experiment\Subj1\corruption_test.npy", uncorrected)
-  
-    #plt.imshow(np.max(np.abs(uncorrected-gt), axis=-1).T, cmap='magma', origin='lower', vmin=0.0, vmax=vm); plt.show();
     #We center the inputs again becuase the full pyramid recon handles the shifting for us
     #ksp = cp.fft.fftshift(ksp, axes=(-3,-2,-1))
     #mps = cp.fft.fftshift(mps, axes=(-3,-2,-1))
