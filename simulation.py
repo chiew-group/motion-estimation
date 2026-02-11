@@ -278,8 +278,7 @@ def main():
     assert gt.shape[0] % tile_size[0] == 0
     assert gt.shape[1] % tile_size[1] == 0
     nshots = prod(tile_size) // args.accel
-    nshots_corruption = gt.shape[0] // args.accel if args.continuous else nshots
-    #nshots_corruption = nshots
+    nshots_corruption = gt.shape[1] // args.accel if args.continuous else nshots
     print(f"Number of corruptions shots: {nshots_corruption}")
     print(f"Number of shots: {nshots} with tiles of size {tile_size} and acceleration factor {args.accel}")
     K = gt.shape[:2]
