@@ -260,6 +260,7 @@ def main():
     ap.add_argument("--no", type=int, default=0)
     ap.add_argument("--mask", type=str, default=None)
     ap.add_argument("--transforms", type=str, default=None)
+    ap.add_argument("--low_freq_var", type=int, default=1)
     ap.add_argument("--continuous", action='store_true')
     args = ap.parse_args()
 
@@ -353,7 +354,7 @@ def main():
     #pl.ImagePlot(corruption_A)
     #pl.ImagePlot(np.sum(corruption_A, axis=0))
 
-    corruption_transforms = generate_motion_parameters_new(nshots_corruption, low_freq_var=1, high_freq_var=20.0)
+    corruption_transforms = generate_motion_parameters_new(nshots_corruption, low_freq_var=args.low_freq_var, high_freq_var=20.0)
     #fix, axes = plt.subplots(2,1, dpi=300)
     #axes[0].plot(corruption_transforms[:, :3])
     #axes[0].set_title('Translations')
