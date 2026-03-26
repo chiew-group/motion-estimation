@@ -137,7 +137,7 @@ class TransformEstimation(sp.app.App):
 
 def estimate_transform(ksp, mps, shot_mask, image, kgrid, rkgrid, damp, convergence_flags,
                        residual_buf, partial_buf, gradient_buf, hessian_buf,
-                       transforms=None, max_iter=10, tol=1e-6,
+                       transforms=None, max_iter=10, tol=1e-6, use_ga=False
                        ):
     
     xp = cp.get_array_module(ksp)
@@ -180,7 +180,63 @@ def estimate_transform(ksp, mps, shot_mask, image, kgrid, rkgrid, damp, converge
 
         #Solve for delta step and estimate the Hessian matrix from Jacobians, then compute next error
         delta = xp.linalg.solve(hessian_buf, gradient_buf)
-        next_transform = transforms[s] - delta
+
+        # --- Geodesic acceleration (GA) ---
+        #Still experimental and needs testing!
+        if use_ga:
+            jv_buf = xp.zeros_like(residual_buf)
+            eps = 1e-4  # you can tune; 1e-3..1e-5 typical
+
+            v = -delta  # actual increment since you do transforms[s] - delta
+
+            # 1) Compute Jv = sum_p v[p] * J_p using existing partial_buf[p]
+            #    jv_buf is an extra complex buffer passed in (same shape as residual_buf)
+            jv_buf.fill(0)
+            for p_idx in range(6):
+                # jv_buf += v[p_idx] * partial_buf[p_idx]
+                xp.add(jv_buf, v[p_idx] * partial_buf[p_idx], out=jv_buf)
+
+            # 2) Compute J_eps v at theta_eps = theta + eps*v WITHOUT storing all J_eps columns.
+            theta_eps = transforms[s] + eps * v
+            dT_eps = RigidTransformDerivativeCuda(image.shape, theta_eps, kgrid, rkgrid)
+
+            # reuse residual_buf as accumulator for jv_eps
+            residual_buf.fill(0)
+            for p_idx in range(6):
+                # temp = A*F*S*(dT_eps.apply(image,p))
+                tmp = residual_buf  # just a name; we overwrite it each loop then add into accumulator
+                xp.multiply(mps, dT_eps.apply(image, p_idx), out=tmp)
+                tmp = gpu_fftn(tmp, axes=(-3,-2,-1), norm='ortho', overwrite_x=True)
+                xp.multiply(shot_mask[s], tmp, out=tmp)
+
+                # residual_buf_accum += v[p_idx] * tmp
+                xp.add(residual_buf, v[p_idx] * tmp, out=residual_buf)
+
+            # 3) Directional derivative: J'v ≈ (J_eps v - Jv)/eps (stored in residual_buf)
+            xp.subtract(residual_buf, jv_buf, out=residual_buf)
+            residual_buf /= eps  # now residual_buf holds Jprime_v
+
+            # 4) Compute rhs = -J^T (J'v)
+            #    Using inner products with existing J columns in partial_buf
+            #    (this is cheap: 6 dot products)
+            for p_idx in range(6):
+                gradient_buf[p_idx] = -xp.vdot(residual_buf, partial_buf[p_idx]).real
+
+            # 5) Solve (J^T J + λI) a = rhs
+            a = xp.linalg.solve(hessian_buf, gradient_buf)
+
+            # 6) Accept only if acceleration is not crazy (stability gate)
+            if xp.linalg.norm(a) <= 1.0 * xp.linalg.norm(v):
+                v_ga = v + 0.5 * a
+            else:
+                v_ga = v
+
+            next_transform = transforms[s] + v_ga
+        else:
+            next_transform = transforms[s] - delta
+        # --- end GA ---
+
+        #next_transform = transforms[s] - delta
         
         #Calculate the resid for the new transform
         #T = RigidTransform(self.img_shape, self.img_shape, next_transform, self.kgrid, self.rkgrid)
@@ -196,7 +252,7 @@ def estimate_transform(ksp, mps, shot_mask, image, kgrid, rkgrid, damp, converge
 
         #Check candidate for update and if so check partial convergence for this motion state
         if e1 < e0:
-            if (transforms[s] - next_transform < tol).all():
+            if xp.all(xp.abs(transforms[s] - next_transform) < tol):
                 convergence_flags[s] = True
             transforms[s] = next_transform.copy()
             damp[s] = xp.maximum(damp[s] / 5, 1e-4)
