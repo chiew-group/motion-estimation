@@ -1,6 +1,9 @@
-sigpy
-scipy==1.13.1
+numpy
 cupy
+sigpy
+scipy
 mpi4py
 matplotlib
-gt-twixtools
+nibabel
+tqdm
+twixtools
