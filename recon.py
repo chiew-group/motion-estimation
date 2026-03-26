@@ -23,13 +23,53 @@ def noise_whiten(ksp, noise, reg=1e-6):
     white_ksp = (W @ ksp.reshape(num_coils, -1)).reshape(ksp.shape)
     return white_ksp, W
 
-if __name__ == '__main__':
+def main():
+    """
+    Main entry for joint reconstruction motion-correction pipeline.
+
+    Command-line arguments:
+
+    --dat (str, required): Path to the Siemens TWIX `.dat` file to read raw k-space from.
+    --out (str, required): Output directory. Subfolders `pre/` and `recon/` will be created for intermediates and results.
+    --nshots (int, required): Number of motion states / shots to split the data into for motion estimation.
+    --sampling (str, default='disorder'): Sampling order used to build motion masks. Supported: 'disorder' or 'sequential'.
+    --iters (int, default=1000): Number of joint reconstruction iterations passed to `pyramid_reconstruction`.
+
+    Notes:
+    - The script uses `twixtools` to read Siemens TWIX data and will extract `image`, `refscan`, and `noise` sections.
+    - Outputs saved under `<out>/pre/`: `ksp.npy`, `ref.npy`, `noise.npy`, `mps.npy`, `cc_ksp.npy`, `cc_mps.npy`, `white_ksp.npy`.
+    - Final recon saved under `<out>/recon/` including `joint_recon.npy` and `joint_recon.nii.gz`.
+    """
+
     parser = argparse.ArgumentParser(description="Joint reconstruction for motion correction")
-    parser.add_argument("--dat", required=True)
-    parser.add_argument("--out", required=True)
-    parser.add_argument("--nshots", type=int, required=True)
-    parser.add_argument("--sampling", type=str, default='disorder')
-    parser.add_argument("--iters", type=int, default=1000)
+    parser.add_argument(
+        "--dat",
+        required=True,
+        help="Path to Siemens TWIX .dat file containing raw acquisition data",
+    )
+    parser.add_argument(
+        "--out",
+        required=True,
+        help="Output directory for intermediates and results (creates pre/ and recon/ subfolders)",
+    )
+    parser.add_argument(
+        "--nshots",
+        type=int,
+        required=True,
+        help="Number of motion states/shots to partition k-space into for motion estimation",
+    )
+    parser.add_argument(
+        "--sampling",
+        type=str,
+        default='disorder',
+        help="Sampling order to use when building motion masks: 'disorder' (default) or 'sequential'",
+    )
+    parser.add_argument(
+        "--iters",
+        type=int,
+        default=1000,
+        help="Number of joint reconstruction iterations passed to pyramid_reconstruction (default: 1000)",
+    )
     args = parser.parse_args()
 
     preprocess_path = Path(args.out) / "pre"
@@ -39,7 +79,7 @@ if __name__ == '__main__':
     recon_path.mkdir(exist_ok=True, parents=True)
 
     # Load and extract from .dat
-    mapped = twixtools.map_twix(twixtools.read_twix(args.dat))
+    mapped = twixtools.map_twix(twixtools.read_twix(args.dat, parse_pmu=False))
     print(f"Loaded {args.dat}")
 
 
@@ -130,4 +170,8 @@ if __name__ == '__main__':
     np.save(recon_path / "estimated_transforms", t_est)
     show_mid_slices(recon, save_path=recon_path / "image_slices.png")
     nib.save(nib.Nifti1Image(np.abs(recon).astype(np.float64), np.eye(4)), recon_path / "joint_recon.nii.gz")
+
+
+if __name__ == '__main__':
+    main()
 
