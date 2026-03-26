@@ -1,145 +1,38 @@
 import sigpy as sp
-from transform import RigidTransform, RigidTransformDerivative, RigidTransformDerivativeCuda, RigidTransformCudaOptimzied
+from transform import RigidTransformDerivativeCuda, RigidTransformCudaOptimzied
 import cupy as cp
 from cupyx.scipy.fft import fftn as gpu_fftn, ifftn as gpu_ifftn
 import numpy as np 
-
-class LMAlgorithm(sp.alg.Alg):
-    def __init__(self, ksp, mps, shot_mask, 
-                 transforms, img, kgrid, rkgrid, 
-                 damp, convergence_flags, convergence_reset_count, max_iter=100, tol=1e-4):
-        #Constant Algorithm Parameters
-        self.ksp = ksp
-        self.mps = mps
-        self.shot_mask = shot_mask
-        self.kgrid = kgrid
-        self.rkgrid = rkgrid
-        self.tol = tol
-
-        #Mutable INPUT values that will be updated by the algorithm
-        self.transforms = transforms
-        self.img = img
-        self.damp = damp
-        self.convergence_flags = convergence_flags
-        self.convergence_reset_count = convergence_reset_count
-
-        #Algorithm State
-        self.num_shots = len(transforms)
-        self.img_shape = self.img.shape
-
-        xp = sp.get_array_module(self.img)
-        self.partial_buf = xp.zeros((6,) + self.ksp.shape, dtype=img.dtype)
-        self.grad_buf = xp.zeros(6, dtype=float)
-        self.hess_buf = xp.zeros((6,6), dtype=float)
-
-        super().__init__(max_iter)
-
-    def _update(self):
-        xp = sp.get_array_module(self.img)
-        S = sp.linop.Multiply(self.img_shape, self.mps)
-        F = sp.linop.FFT(S.oshape, axes=[-3,-2,-1])
-        
-        for shot_idx in range(self.num_shots):
-            if self.convergence_flags[shot_idx]:
-                self.convergence_reset_count[shot_idx] += 1
-                if self.convergence_reset_count[shot_idx] == 500:
-                    self.convergence_reset_count[shot_idx] = 0
-                    self.convergence_flags[shot_idx] = False
-                continue 
-            A = sp.linop.Multiply(F.oshape, self.shot_mask[shot_idx])
-            T = RigidTransform(self.img_shape, self.img_shape, self.transforms[shot_idx], self.kgrid, self.rkgrid)
-
-            #Calculate the resid error or energy
-            resid = (A * F * S * T * self.img) - (A*self.ksp)
-            current_error = xp.linalg.norm(resid)
-
-            #Compute the partial derive kspaces
-            #partials = []
-            #gradient = [] 
-            for p_idx in range(6):
-                T = RigidTransformDerivative(self.img_shape, self.img_shape, p_idx, self.transforms[shot_idx], self.kgrid, self.rkgrid)
-                #partials.append(A * F * S * T * self.img)
-                self.partial_buf[p_idx] = A * F * S * T * self.img
-                self.grad_buf[p_idx] = xp.vdot(resid, self.partial_buf[p_idx]).real
-                #Compute the gradient of the motion state while we are at it
-                #gradient.append(xp.sum(xp.real(resid.conj() * partials[-1])))
-            #gradient = xp.array(gradient)
-
-            #Approximate the Hessian matrix from partials
-            """
-            hessian = xp.zeros((6,6))
-            for row in range(6):
-                for col in range(row, 6):
-                    hessian[row, col] = xp.sum(xp.real(partials[row].conj() * partials[col]))
-            i_lower = xp.tril_indices(6, -1)
-            hessian[i_lower] = hessian.T[i_lower]
-            """
-            for i in range(6):
-                pi = self.partial_buf[i]
-                for j in range(i, 6):
-                    val = xp.vdot(pi, self.partial_buf[j]).real
-                    if i == j:
-                        self.hess_buf[i,i] = val + self.damp[shot_idx]
-                    else:
-                        self.hess_buf[i, j] = val
-                        self.hess_buf[j, i] = val
-            
-            #hessian += self.damp[shot_idx] * xp.eye(6)
-            #delta = xp.linalg.lstsq(hessian, gradient, rcond=None)[0]
-            #self.hess_buf 
-            delta = xp.linalg.solve(self.hess_buf, self.grad_buf)
-            next_transform = self.transforms[shot_idx] - delta
-            
-            #Calculate the resid for the new transform
-            T = RigidTransform(self.img_shape, self.img_shape, next_transform, self.kgrid, self.rkgrid)
-            resid = (A * F * S * T * self.img) - (A*self.ksp)
-            next_error = xp.linalg.norm(resid)
-
-            #Check candidate for update and if so check partial convergence for this motion state
-            if next_error < current_error:
-                if (self.transforms[shot_idx] - next_transform < self.tol).all():
-                    self.convergence_flags[shot_idx] = True
-                self.transforms[shot_idx] = next_transform.copy()
-                self.damp[shot_idx] = xp.maximum(self.damp[shot_idx] / 3, 1e-4)
-            else:
-                self.damp[shot_idx] = xp.minimum(self.damp[shot_idx] * 1.5, 1e16)
-
-class TransformEstimation(sp.app.App):
-    def __init__(self, ksp, mps, shot_mask, 
-                 transforms, img, kgrid, rkgrid, 
-                 damp, convergence_flags, convergence_reset_count, constraint=None, max_iter=100, tol=1e-6, device=sp.cpu_device, show_pbar=True, leave_pbar=True):
-        self.transforms = sp.to_device(transforms, device)
-        self.kgrid = kgrid
-        self.rkgrid = rkgrid
-        self.img = sp.to_device(img, device)
-        self.img_shape = img.shape
-        self.constraint = constraint
-        self.device = device
-
-        ksp_gpu = sp.to_device(ksp, device)
-        alg = LMAlgorithm(ksp_gpu, mps, shot_mask, 
-                          self.transforms, self.img, kgrid, rkgrid, 
-                          damp, convergence_flags, convergence_reset_count, max_iter=max_iter, tol=tol)
-        
-        super().__init__(alg, show_pbar=show_pbar, leave_pbar=leave_pbar)
-    
-    def _post_update(self):
-        mean_transform = self.transforms.mean(axis=0)
-        T = RigidTransform(self.img_shape, self.img_shape, mean_transform, self.kgrid, self.rkgrid)
-        next_img = (T * self.img)
-        
-        if self.constraint is not None:
-            self.constraint = sp.to_device(self.constraint, self.device)
-            next_img *= self.constraint
-        
-        sp.copyto(self.img, next_img)
-        self.transforms -= mean_transform
 
 def estimate_transform(ksp, mps, shot_mask, image, kgrid, rkgrid, damp, convergence_flags,
                        residual_buf, partial_buf, gradient_buf, hessian_buf,
                        transforms=None, max_iter=10, tol=1e-6, use_ga=False
                        ):
-    
+    """
+    Estimates motion transforms for each motion state one at a time. The transform is then updated inplace and a zero mean updated transform of the image is returned.
+
+    Args:
+        ksp [ncoils, kx, ky, kz] complex64: K-space.
+        mps [ncoils, kx, ky, kz] complex64: Sensitivity maps.
+        shot_mask [nshots, x, y, z] bool: Sampling mask for each motion state.
+        image [x, y, z] complex64: Current image used in motion state estimation, will be update in place with new transforms.
+        kgrid: Dictionary holding the precomputed grid sizes for kspace.
+        rkgrid: Dictionary holding the precomputed grid sizes for spatial-spectral space.
+        damp [nshots] float: Each motion state will have a dampening parameter that changes hessian estimation and will be updated inplace.
+        convergence_flags [nshots] bool: Flags for determining convergence of a particular motion state, all states need to achieve convergence.
+        residual_buf [ncoils, kx, ky, kz] complex64: Pre allocated buffer that will hold the residual results for intermediate calculations.
+        partial_buf [6, ncoils, kx, ky, kz] complex64: Pre allocated buffer that will hold all the partial derivatives for intermediate calculations.
+        gradient_buf [6] float: Pre allocated buffer holding intermediate results for the dot product of residual and gradient buffers.
+        hessian_buf [6,6] float: Pre allocated buffer to hold the estimated hessian of a single motion state estiamtion.
+        transforms [nshots, 6] float: Current set of transforms, these will be update inplace or initialized to zero if None .
+        max_iter: Number of iterations for motion estimation, typically only set to one for joint reconstructions.
+        tol: Tolerance for all motion states.
+        use_ga: Boolean flag to determine if geodesic acceleration should be used in newton's method steps.
+
+    Returns:
+        image: Updated image based on new transform estimations.
+        [transforms]: Updated transforms only done inplace.
+    """
     xp = cp.get_array_module(ksp)
     nshots = shot_mask.shape[0]
 
@@ -157,10 +50,6 @@ def estimate_transform(ksp, mps, shot_mask, image, kgrid, rkgrid, damp, converge
         #correct passed in buffer that way allocation of these only happens once in the joint class
         dT = RigidTransformDerivativeCuda(image.shape, transforms[s], kgrid, rkgrid)
         for p_idx in range(6):
-            #T = RigidTransformDerivative(self.img_shape, self.img_shape, p_idx, self.transforms[shot_idx], self.kgrid, self.rkgrid)
-            #partials.append(A * F * S * T * self.img)
-            
-            #partial_buf[p_idx] = A * F * S * (dT.apply(self.img, p_idx))
             xp.multiply(mps, dT.apply(image, p_idx), out=partial_buf[p_idx])
             partial_buf[p_idx] = gpu_fftn(partial_buf[p_idx], axes=(-3,-2,-1), norm='ortho', overwrite_x=True)
             xp.multiply(shot_mask[s], partial_buf[p_idx], out=partial_buf[p_idx])
@@ -236,18 +125,13 @@ def estimate_transform(ksp, mps, shot_mask, image, kgrid, rkgrid, damp, converge
             next_transform = transforms[s] - delta
         # --- end GA ---
 
-        #next_transform = transforms[s] - delta
-        
         #Calculate the resid for the new transform
-        #T = RigidTransform(self.img_shape, self.img_shape, next_transform, self.kgrid, self.rkgrid)
         T = RigidTransformCudaOptimzied(next_transform, kgrid, rkgrid)
-        #resid = (A * F * S * T * self.img) - (A*self.ksp)
         xp.multiply(mps, T.apply(image), out=residual_buf)
         residual_buf = gpu_fftn(residual_buf, axes=(-3,-2,-1), norm='ortho', overwrite_x=True)
         xp.subtract(residual_buf, ksp, out=residual_buf)
         xp.multiply(residual_buf, shot_mask[s], out=residual_buf)
-        
-        #next_error = xp.linalg.norm(resid)
+
         e1 = xp.vdot(residual_buf, residual_buf).real
 
         #Check candidate for update and if so check partial convergence for this motion state
