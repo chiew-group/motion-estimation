@@ -22,6 +22,28 @@ def _plot_convergence(loss, title="", save=None):
 
 
 def pyramid_reconstruction(ksp, mps, A, nshots, n_spatial_levels=3, n_temporal_levels=3, n_joint_iters=100, save_path=None, sampling='disorder'):
+    """
+    Perform multi-resolution (pyramid) joint reconstruction for motion-corrupted k-space.
+
+    Parameters
+    - ksp (array-like): Input k-space array with shape (ncoils, H, W, [D]) or similar. Can be NumPy or CuPy array; the function will move data to CuPy for final processing.
+    - mps (array-like): Sensitivity maps with shape compatible with `ksp` (typically (ncoils, H, W, [D])).
+    - A (array-like): Sampling mask with shape (nshots, H, W, 1) (boolean-like). The first dimension indexes motion states/shots.
+    - nshots (int): Number of motion states / shots represented in `A`.
+    - n_spatial_levels (int, optional): Number of spatial pyramid levels (default: 3). Coarser levels run joint motion estimation.
+    - n_temporal_levels (int, optional): Number of temporal aggregation levels (currently reserved/unused; default: 3).
+    - n_joint_iters (int, optional): Base number of joint reconstruction iterations at full resolution. This value is scaled at coarser levels (default: 100).
+    - save_path (path-like or None, optional): If provided, convergence plots are saved under this path.
+    - sampling (str, optional): Sampling mode used when downsampling. Supported values: 'disorder' (default) or 'sequential'. Affects downsampled image shape handling.
+
+    Returns
+    - x (np.ndarray): Reconstructed image at full resolution (NumPy array). Complex-valued image returned in image-space and centered.
+    - t_est (np.ndarray): Estimated transforms, shape (nshots, 6), dtype float. Each row contains [tx, ty, tz, rx, ry, rz] (rotations in radians).
+
+    Notes
+    - The function internally converts arrays to CuPy for GPU-accelerated operations and back to NumPy for return values.
+    - At coarse pyramid levels, a `JointRecon` instance is used to jointly estimate image and transforms; final stage performs image-only estimation via `estimate_image_cg`.
+    """
 
     #Initialize
     img_full_res = ksp.shape[1:]
@@ -54,11 +76,8 @@ def pyramid_reconstruction(ksp, mps, A, nshots, n_spatial_levels=3, n_temporal_l
         _plot_convergence(app.objective_history, 
                           f"Objective loss at [1/{down_factor}] resolution", 
                           save=save_path / f"loss_{down_factor}_factor.png")
-        #pl.ImagePlot(mps_res)
-        #pl.ImagePlot(A_res)
-        #pl.ImagePlot(ksp_res)
 
-        #Temporal levels
+        #TODO Temporal levels, this is experimental and needs to be further tested
         """
         t_levels = n_temporal_levels if (sl == n_spatial_levels - 1) else 1
         for t_lvl in range(t_levels):
@@ -75,6 +94,7 @@ def pyramid_reconstruction(ksp, mps, A, nshots, n_spatial_levels=3, n_temporal_l
             print(f"Temporal Factor:: {A_eff.shape}, {T_eff.shape}")
         """
     print("Final level of the pyramid - full resollution, image estimation only!")
+
     #Image recon only at the highest spatial level
     ksp = cp.fft.ifftshift(cp.array(ksp),axes=(-3,-2,-1)).astype(cp.complex64)
     mps = cp.fft.ifftshift(cp.array(mps), axes=(-3,-2,-1)).astype(cp.complex64)
@@ -106,12 +126,3 @@ def aggregate_transforms(T, bin_factor):
     nshots = T.shape[0]
     nbins = nshots // bin_factor
     return T.reshape((nbins, bin_factor, 6)).sum(1)
-
-#ksp = np.load('sample/real_test_data/R2/pre/cc_ksp.npy')
-#mps = np.load('sample/real_test_data/R2/pre/cc_mps.npy')
-#A = np.load('sample/real_test_data/R2/pre/maskR2.npy')
-#A =  A[..., None]
-#A = np.repeat(A[...,None], ksp.shape[-1], axis=-1)
-#recon = pyramid_reconstruction(ksp, mps, A, 8, n_joint_iters=1)
-#import sigpy.plot as pl
-#pl.ImagePlot(recon)
