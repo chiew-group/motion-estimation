@@ -8,6 +8,33 @@ from tqdm import tqdm
 
 
 class JointRecon:
+    """
+    Joint image + rigid-transform reconstruction driver.
+
+    This class implements an alternating (joint) reconstruction loop that
+    (1) estimates the image given current transform estimates and
+    (2) updates rigid-body transforms for each shot. It is GPU-aware and
+    moves NumPy inputs to CuPy for heavy computation.
+
+    Parameters (constructor):
+    - ksp (array): Measured k-space, shape (ncoils, H, W[, D]).
+    - mps (array): Sensitivity maps, shape compatible with `ksp` (ncoils, H, W[, D]).
+    - shot_mask (array): Sampling mask per shot, shape (nshots, H, W, 1) boolean-like.
+    - kgrid, rkgrid: Grids used by the transform operator (from compute_transform_grids_voxel).
+    - t0 (array, optional): Initial transforms (nshots, 6). If None, zeros are used.
+    - max_cg_iter (int): Max iterations for the conjugate-gradient image estimator (default: 3).
+    - max_nm_iter (int): Max iterations for the transform (Newton/LM-like) optimizer per joint step (default: 1).
+    - max_joint_iter (int): Number of outer joint iterations (default: 100).
+    - xp (module): Array module to use for CPU-side buffers (np or cp). Defaults to `numpy`.
+
+    Attributes (selected):
+    - x: current image estimate (CuPy array)
+    - t: current transforms (CuPy array shape (nshots,6))
+    - transform_history, objective_history: lists populated by `run()` tracking progress
+
+    Methods:
+    - run(): run the joint reconstruction loop and return (recon_image, transforms).
+    """
     def __init__(
         self, 
         ksp, 
