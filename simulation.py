@@ -248,20 +248,111 @@ def make_disorder_order(cfg: DisorderConfig) -> List[Tuple[int, int]]:
 
 
 def main():
+    """
+    Main entry for DISORDER 3D synthetic motion experiment sweep.
+
+    Command-line arguments (via argparse):
+
+    --ground (str, required): Path to the ground-truth `.npy` file containing a 3D complex image.
+    --mps (str, required): Path to the sensitivity maps `.npy` file (expected shape: coils x H x W x D).
+    --out_dir (str, required): Output directory to save results (nifti files, slices, and results .npz).
+    --ord (str, default='disorder'): Sampling order to use. Supported: 'disorder' or 'sequential'.
+    --tile_size (int int, required): Two integers specifying tile shape (Partitions Lines). Must match shot count.
+    --accel (int, default=2): Acceleration (undersampling) factor applied to k-space sampling.
+    --seed (int, default=42): Random seed for sampling/order generation.
+    --iters (int, default=200): Number of joint reconstruction iterations passed to `pyramid_reconstruction`.
+    --no (int, default=0): Noise multiplier; if >0 complex Gaussian noise (scaled from k-space max) is added.
+    --mask (str, default=None): Optional path to a mask `.npy` file to override generated sampling masks.
+    --transforms (str, default=None): Optional path to transforms `.npy` file (not required for default flow).
+    --low_freq_var (int, default=1): Controls low-frequency variation magnitude when generating motion.
+    --continuous (flag): If set, uses a continuous corruption length for corruption mask (affects nshots_corruption).
+
+    Notes:
+    - `--tile_size` should be provided as two integers (e.g. `--tile_size 8 8`).
+    - File paths are expected to be NumPy `.npy` files compatible with the script's loaders.
+    """
     ap = argparse.ArgumentParser(description="DISORDER 3D synthetic motion experiment sweep")    
-    ap.add_argument("--ground", required=True, help="Ground-truth")
-    ap.add_argument("--mps", required=True, help="Sensitivity maps")
-    ap.add_argument("--out_dir", required=True, type=str, help="Output dir for all the results")
-    ap.add_argument("--ord", default='disorder', type=str)
-    ap.add_argument("--tile_size", type=int, nargs='+', help="Comma list of tile shape, needs to match shot count")
-    ap.add_argument("--accel", type=int, default=2)
-    ap.add_argument("--seed", type=int, default=42)
-    ap.add_argument("--iters", type=int, default=200)
-    ap.add_argument("--no", type=int, default=0)
-    ap.add_argument("--mask", type=str, default=None)
-    ap.add_argument("--transforms", type=str, default=None)
-    ap.add_argument("--low_freq_var", type=int, default=1)
-    ap.add_argument("--continuous", action='store_true')
+    ap.add_argument(
+        "--ground",
+        required=True,
+        help="Path to ground-truth .npy file containing a 3D complex image",
+    )
+    ap.add_argument(
+        "--mps",
+        required=True,
+        help="Path to sensitivity maps .npy file (coils x H x W [, D]).",
+    )
+    ap.add_argument(
+        "--out_dir",
+        required=True,
+        type=str,
+        help="Output directory to save results (nifti, slices, and results .npz).",
+    )
+    ap.add_argument(
+        "--ord",
+        default='disorder',
+        type=str,
+        help="Sampling order: 'disorder' (default) or 'sequential' (line-wise).",
+    )
+    ap.add_argument(
+        "--tile_size",
+        type=int,
+        nargs='+',
+        help="Tile shape as two integers: (Partitions Lines) (e.g. --tile_size 8 8).",
+    )
+    ap.add_argument(
+        "--accel",
+        type=int,
+        default=2,
+        help="Acceleration (undersampling) factor applied to k-space sampling (default: 2).",
+    )
+    ap.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for reproducible sampling/order generation (default: 42).",
+    )
+    ap.add_argument(
+        "--iters",
+        type=int,
+        default=200,
+        help="Number of joint reconstruction iterations passed to pyramid_reconstruction (default: 200).",
+    )
+    ap.add_argument(
+        "--no",
+        type=int,
+        default=0,
+        help=(
+            "Noise multiplier; if >0 adds complex Gaussian noise scaled from k-space max. "
+            "Used as std = max(ksp) * 0.0001 * <no>.")
+    )
+    ap.add_argument(
+        "--mask",
+        type=str,
+        default=None,
+        help=(
+            "Optional path to a mask .npy file to override generated sampling masks. "
+            "Mask will be broadcast/expanded to match expected dimensions."),
+    )
+    ap.add_argument(
+        "--transforms",
+        type=str,
+        default=None,
+        help="Optional path to a transforms .npy file with precomputed motion parameters.",
+    )
+    ap.add_argument(
+        "--low_freq_var",
+        type=int,
+        default=1,
+        help="Low-frequency variance for motion generation (controls drift/wobble magnitude).",
+    )
+    ap.add_argument(
+        "--continuous",
+        action='store_true',
+        help=(
+            "If set, uses a continuous corruption length for corruption masks (affects nshots_corruption)."
+        ),
+    )
     args = ap.parse_args()
 
     out = Path(args.out_dir)
@@ -294,19 +385,14 @@ def main():
             cfg = DisorderConfig(
                 max_line_number=gt.shape[1]-1,         # e.g. 224 lines (0..223) before padding
                 max_partition_number=gt.shape[0]-1,     # e.g. 64 partitions (0..63) before padding
-                pat_lines_to_measure=gt.shape[1]//args.accel,    # example PAT lines
-                block_lin=tile_size[1],                 # tile height
-                block_par=tile_size[0],                 # tile width
+                pat_lines_to_measure=gt.shape[1]//args.accel,    #PAT lines aquired, correct config calculation is lines/acceleration factor
+                block_lin=tile_size[1],                 # tile lines
+                block_par=tile_size[0],                 # tile partitions
                 seed=123456
             )
             order, (L,P) = make_disorder_order(cfg)
             order = np.array(order, dtype=int)
 
-            #Sample coordinates using DISORDER then take up to the acceleration amount
-            #R=2 means first half and R=4 means first quarter
-            #shot_ids, temporal, y, x = sample_disorder(K, tile_size, R=1, seed=args.seed)        
-            #y = y[:len(y)//args.accel]
-            #x = x[:len(x)//args.accel]
             #Create the reconstruction mask by binning a certain amount of samples per motion state
             A = np.zeros((nshots, *K), dtype=bool)
             samples_per_shot = order.shape[0] // nshots
@@ -350,30 +436,19 @@ def main():
         #Not having data in the third dimension saves us some space and lets numpy do the work
         A = A[..., None]
         corruption_A = corruption_A[..., None]
-    #pl.ImagePlot(A)
-    #pl.ImagePlot(corruption_A)
-    #pl.ImagePlot(np.sum(corruption_A, axis=0))
 
     corruption_transforms = generate_motion_parameters_new(nshots_corruption, low_freq_var=args.low_freq_var, high_freq_var=20.0)
-    #fix, axes = plt.subplots(2,1, dpi=300)
-    #axes[0].plot(corruption_transforms[:, :3])
-    #axes[0].set_title('Translations')
-    #axes[1].plot(corruption_transforms[:,3:] * 180/np.pi)
-    #axes[1].set_title('Rotations')
-    #plt.show()
-    #corruption_transforms = np.load(r"c:\Users\giuse\OneDrive\Documents\Nov19_2025_experiment\sub1_nomotion\estimated_transforms.npy")
-
-    #plot_transforms(corruption_transforms)
 
     gt  = cp.array(gt)
     mps = cp.array(mps)
     A   = cp.array(A)
     corruption_A = cp.array(corruption_A)
+
     #Here we make sure that our generated motion curve is at the highest number of shots for each simulation
     #Only from there we can chop it up to the amount of acceleration we want this way the same curve is used
     #each time
     corruption_transforms = cp.array(corruption_transforms[:nshots_corruption])
-    #corruption_transforms = cp.zeros((nshots_corruption, 6))
+    
     #Create the motion corrupted kspace using the corruption mask
     #Add some complex gaussian noise if required
     ksp = generate_corrupted_kspace(gt, mps, corruption_A, corruption_transforms)
@@ -382,49 +457,24 @@ def main():
         noise = generate_complex_gaussian_noise(ksp.shape, std=std, xp=cp)
         ksp += noise
 
-    #with_noise = cp.sum(mps.conj() * sp.ifft(ksp + noise, axes=(-3,-2,-1)), axis=0)
-    #no_noise   = cp.sum(mps.conj() * sp.ifft(ksp, axes=(-3,-2,-1)), axis=0)
-    
-    #show_mid_slices(with_noise.get())
-    #show_mid_slices(no_noise.get())
-
-
     ksp = cp.array(ksp)
-    #We must uncenter the inputs to use image estimation since that is required form of input
-    #ksp = cp.fft.ifftshift(ksp, axes=(-3,-2,-1))
-    #mps = cp.fft.ifftshift(mps, axes=(-3,-2,-1))
-    #A   = cp.fft.ifftshift(A,   axes=(-3,-2,-1))
 
-    #kgrid, rkgrid = compute_transform_grids_voxel(gt.shape, [1,1,1], xp=cp)
-
-    p = 1 / (cp.sum(cp.abs(mps) ** 2, axis=0) + 1e-6)
-    M = (cp.sum(cp.abs(mps) ** 2, axis=0) > 0.1)
+    p = 1 / (cp.sum(cp.abs(mps) ** 2, axis=0) + 1e-6) #preconditioner
+    M = (cp.sum(cp.abs(mps) ** 2, axis=0) > 0.1) #mask to zero out anything outside the brain
     P = sp.linop.Multiply(ksp.shape[1:], p)
     uncorrected = sp.mri.app.SenseRecon(ksp, mps, P=P, device=sp.Device(0), tol=1e-12).run()
-    #uncorrected = estimate_image_cg(ksp, mps, A, cp.zeros((nshots, 6)), kgrid, rkgrid, P, M, max_iter=10)
-    #uncorrected = cp.fft.fftshift(uncorrected)
     uncorrected = cp.asnumpy(uncorrected)
     gt = cp.asnumpy(gt)
-    #plt.imshow(np.abs(uncorrected-gt)[...,160].T, origin='lower', cmap='magma'); plt.show()
-    #pl.ImagePlot(uncorrected)
-    #We center the inputs again becuase the full pyramid recon handles the shifting for us
-    #ksp = cp.fft.fftshift(ksp, axes=(-3,-2,-1))
-    #mps = cp.fft.fftshift(mps, axes=(-3,-2,-1))
-    #A   = cp.fft.fftshift(A,   axes=(-3,-2,-1))
 
-
+    #Pyramid reconstruction will internally handle all the shifting and unshifting required for recon simply pass arguments in
     corrected, t_estimates = pyramid_reconstruction(ksp, mps, A, nshots, 
                                                     n_joint_iters=args.iters, 
                                                     save_path=out)
     
     #The corrected recon and transform estimates will have be sent back to the cpu already
 
-    #pl.ImagePlot(corrected)
-    #pl.ImagePlot(uncorrected)
-    
     err_volume = np.real(np.abs(corrected - gt))
     err_img = np.linalg.norm(err_volume)
-    #err_t = np.linalg.norm(corruption_transforms-t_estimates)
 
     #We save the corrected and uncorrected as compressed nifti files to aquires QA scores
     nib.save(nib.Nifti1Image(np.abs(corrected).astype(np.float64), np.eye(4)), out / "corrected.nii.gz")
